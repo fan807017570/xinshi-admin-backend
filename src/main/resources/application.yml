@@ -1,0 +1,40 @@
+server:
+  port: 8080
+  tomcat:
+    threads:
+      max: 10
+      min-spare: 5
+    accept-count: 1000
+
+spring:
+  profiles:
+    active: local
+  application:
+    name: xinshi-admin
+  # 通过环境变量 SPRING_PROFILES_ACTIVE 或 startup.sh 控制激活的 profile
+  # SPRING_PROFILES_ACTIVE 未设置时默认使用 default profile
+  config:
+    import: optional:file:${XINSHI_CONFIG_DIR:/app/config}/db-config.yml
+
+xinshi:
+  school:
+    name-zh: 江西省上饶市广丰区新实中学
+    address-zh: 江西省上饶市广丰县吴村镇
+    phone: 0793-2928080
+  transcript:
+    # 成绩单 PDF 文件输出目录
+    output-dir: ${xinshi.scheool.transcript.output-dir}
+  deepseek:
+    # DeepSeek API Key，通过环境变量 DEEPSEEK_API_KEY 注入，不配置则不启用润色功能
+    api-key: ${DEEPSEEK_API_KEY:}
+    base-url: https://api.deepseek.com
+    model: deepseek-v4-flash
+    timeout-seconds: 30
+
+logging:
+  level:
+    com.xinshi.admin: INFO
+
+
+
+
