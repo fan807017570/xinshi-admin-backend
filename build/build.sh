@@ -146,6 +146,23 @@ else
     warn "startup.sh not found, skipping"
 fi
 
+# 复制守望进程脚本
+if [ -f "${BACKEND_DIR}/watchdog.sh" ]; then
+    cp "${BACKEND_DIR}/watchdog.sh" "${PACKAGE_DIR}/"
+    chmod +x "${PACKAGE_DIR}/watchdog.sh"
+    info "watchdog.sh copied and made executable"
+else
+    warn "watchdog.sh not found, skipping"
+fi
+
+# 复制 systemd 服务文件
+if [ -f "${BACKEND_DIR}/xinshi-admin.service" ]; then
+    cp "${BACKEND_DIR}/xinshi-admin.service" "${PACKAGE_DIR}/"
+    info "xinshi-admin.service copied"
+else
+    warn "xinshi-admin.service not found, skipping"
+fi
+
 # 生成版本信息文件
 cat > "${PACKAGE_DIR}/VERSION.txt" << EOF
 ========================================
@@ -197,5 +214,6 @@ echo ""
 echo "    1. Edit config:        vim config/application-live.properties"
 echo "    2. Init database:      mysql -u USER -p < scripts/mysql/ddl_init.sql"
 echo "    3. Start service:      ./startup.sh start"
+echo "       (or with watchdog): ./startup.sh watchdog start"
 echo "    4. Check status:       ./startup.sh status"
 echo "========================================"

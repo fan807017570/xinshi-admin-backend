@@ -24,6 +24,7 @@ import java.util.regex.Pattern;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 @Service
@@ -108,9 +109,22 @@ extends SchoolBaseService {
         return this.first(this.jdbcTemplate.queryForList("SELECT s.id, s.student_no AS studentNo, s.student_name AS studentName, s.gender, s.class_id AS classId, c.class_name AS className, s.status, s.remark, s.created_at AS createdAt FROM school_student s LEFT JOIN school_class c ON c.id = s.class_id WHERE s.id = ? AND s.is_deleted = 0", new Object[]{id}));
     }
 
+    @Transactional
     public Map<String, Object> updateStudent(long id, Map<String, Object> request) {
         this.accessControlService.ensureCanManageStudents();
         this.accessControlService.ensureCanAccessStudent(id);
+
+        // Detect class change before the update: query current class_id
+        Long oldClassId = null;
+        Long newClassId = null;
+        if (request.containsKey("classId")) {
+            newClassId = this.requiredLong(request, "classId");
+            Map<String, Object> current = this.first(this.jdbcTemplate.queryForList(
+                "SELECT class_id AS classId FROM school_student WHERE id = ? AND is_deleted = 0",
+                new Object[]{id}));
+            oldClassId = this.optionalLong(current, "classId");
+        }
+
         ArrayList<Object> args = new ArrayList<Object>();
         StringBuilder sql = new StringBuilder("UPDATE school_student SET ");
         boolean first = true;
@@ -140,7 +154,7 @@ extends SchoolBaseService {
                 sql.append(", ");
             }
             sql.append("class_id = ?");
-            args.add(this.requiredLong(request, "classId"));
+            args.add(newClassId);
             first = false;
         }
         if (request.containsKey("remark")) {
@@ -164,7 +178,43 @@ extends SchoolBaseService {
         sql.append(", updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_deleted = 0");
         args.add(id);
         this.jdbcTemplate.update(sql.toString(), args.toArray());
+
+        // Migrate scores and comments if the class has changed
+        if (newClassId != null && oldClassId != null && !newClassId.equals(oldClassId)) {
+            this.migrateScoresOnClassChange(id, oldClassId, newClassId);
+            this.migrateCommentsOnClassChange(id, oldClassId, newClassId);
+        }
+
         return this.getStudent(id);
+    }
+
+    /**
+     * Re-link student course results from old class subjects to new class subjects
+     * by matching subject_id. Only migrates scores originally belonging to the old
+     * class; scores already pointing to the new class (if any) are left untouched.
+     */
+    private void migrateScoresOnClassChange(long studentId, long oldClassId, long newClassId) {
+        this.jdbcTemplate.update(
+            "UPDATE school_student_course_result r " +
+            "JOIN school_class_subject old_cs ON old_cs.id = r.class_subject_id " +
+            "JOIN school_class_subject new_cs " +
+            "  ON new_cs.academic_term_id = old_cs.academic_term_id " +
+            "  AND new_cs.subject_id = old_cs.subject_id " +
+            "  AND new_cs.class_id = ? " +
+            "SET r.class_subject_id = new_cs.id, r.updated_at = CURRENT_TIMESTAMP " +
+            "WHERE r.student_id = ? AND old_cs.class_id = ?",
+            new Object[]{newClassId, studentId, oldClassId});
+    }
+
+    /**
+     * Update the class_id in overall comments to reflect the new class.
+     */
+    private void migrateCommentsOnClassChange(long studentId, long oldClassId, long newClassId) {
+        this.jdbcTemplate.update(
+            "UPDATE school_student_overall_comment " +
+            "SET class_id = ?, updated_at = CURRENT_TIMESTAMP " +
+            "WHERE student_id = ? AND class_id = ?",
+            new Object[]{newClassId, studentId, oldClassId});
     }
 
     public void deleteStudent(long id) {

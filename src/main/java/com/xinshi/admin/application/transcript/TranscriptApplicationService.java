@@ -21,6 +21,8 @@ import com.xinshi.admin.domain.transcript.TranscriptRepository;
 import com.xinshi.admin.interfaces.dto.PageRequest;
 import com.xinshi.admin.interfaces.dto.PageResult;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
@@ -77,10 +79,18 @@ public class TranscriptApplicationService {
             throw new IllegalArgumentException("当前班级未配置课程，不能生成成绩单");
         }
         List<CourseResult> results = this.courseResultRepository.findByParams(academicTermId, classId, null, null, this.authSession.userId(), this.authSession.roles());
-        List resultCsIds = results.stream().map(CourseResult::getClassSubjectId).distinct().collect(Collectors.toList());
-        List missing = classSubjects.stream().filter(cs -> !resultCsIds.contains(cs.getId())).map(ClassSubject::getSubjectName).collect(Collectors.toList());
+        // 按 subjectId（科目逻辑ID）比较，而非 classSubjectId（关联表主键），
+        // 以兼容学生换班后旧成绩的 classSubjectId 与新班级不匹配的场景
+        Set<Long> resultSubjectIds = results.stream()
+            .map(CourseResult::getSubjectId)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toSet());
+        List missing = classSubjects.stream()
+            .filter(cs -> !resultSubjectIds.contains(cs.getSubjectId()))
+            .map(ClassSubject::getSubjectName)
+            .collect(Collectors.toList());
         if (!missing.isEmpty()) {
-            throw new IllegalArgumentException("以下课程尚未录入成绩，不能生成成绩单：" + String.join((CharSequence)"、", missing));
+            throw new IllegalArgumentException("以下课程尚未录入成绩，不能生成成绩单：" + String.join((CharSequence) "、", missing));
         }
     }
 }

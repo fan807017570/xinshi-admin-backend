@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # xinshi-admin 服务管理脚本（独立部署版本）
-# 用法：./startup.sh {start|stop|restart|status}
+# 用法：./startup.sh {start|stop|restart|status|watchdog}
 # ============================================================
 
 set -e
@@ -184,14 +184,54 @@ status_service() {
     fi
 }
 
+# ---------- Watchdog 守护进程 ----------
+WATCHDOG_SCRIPT="${APP_DIR}/watchdog.sh"
+
+watchdog_service() {
+    local cmd="${1:-start}"
+
+    if [ ! -f "${WATCHDOG_SCRIPT}" ]; then
+        echo "[ERROR] Watchdog script not found: ${WATCHDOG_SCRIPT}"
+        exit 1
+    fi
+
+    case "${cmd}" in
+        start)
+            bash "${WATCHDOG_SCRIPT}" start
+            ;;
+        stop)
+            bash "${WATCHDOG_SCRIPT}" stop
+            ;;
+        status)
+            bash "${WATCHDOG_SCRIPT}" status
+            ;;
+        *)
+            echo "Usage: $0 watchdog {start|stop|status}"
+            exit 1
+            ;;
+    esac
+}
+
 # ---------- Main ----------
 case "${1:-start}" in
     start)   start_service ;;
     stop)    stop_service ;;
     restart) stop_service; sleep 2; start_service ;;
     status)  status_service ;;
+    watchdog)
+        watchdog_service "${2:-start}"
+        ;;
     *)
-        echo "Usage: $0 {start|stop|restart|status}"
+        echo "Usage: $0 {start|stop|restart|status|watchdog}"
+        echo ""
+        echo "Commands:"
+        echo "  start              Start the application"
+        echo "  stop               Stop the application"
+        echo "  restart            Restart the application"
+        echo "  status             Show application status"
+        echo "  watchdog start     Start application with auto-restart watchdog"
+        echo "  watchdog stop      Stop watchdog and application"
+        echo "  watchdog status    Show watchdog and application status"
         exit 1
         ;;
 esac

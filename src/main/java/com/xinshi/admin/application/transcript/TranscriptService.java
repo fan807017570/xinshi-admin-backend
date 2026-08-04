@@ -56,6 +56,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 import javax.imageio.ImageIO;
 import org.apache.fontbox.ttf.TrueTypeCollection;
@@ -144,6 +145,9 @@ extends SchoolBaseService {
 
     public Map<String, Object> generateTranscript(Map<String, Object> request) {
         Map<String, Object> existing;
+        if (!StringUtils.hasText(this.transcriptOutputDir)) {
+            throw new IllegalStateException("成绩单输出目录未配置，请联系管理员");
+        }
         this.accessControlService.ensureCanGenerateTranscript();
         long academicTermId = this.requiredLong(request, "academicTermId");
         long classId = this.requiredLong(request, "classId");
@@ -200,6 +204,9 @@ extends SchoolBaseService {
     }
 
     public Map<String, Object> regenerateTranscript(long transcriptId) {
+        if (!StringUtils.hasText(this.transcriptOutputDir)) {
+            throw new IllegalStateException("成绩单输出目录未配置，请联系管理员");
+        }
         this.accessControlService.ensureCanGenerateTranscript();
         Map<String, Object> transcript = this.getTranscript(transcriptId);
         if (transcript.isEmpty()) {
@@ -277,10 +284,21 @@ extends SchoolBaseService {
         if (classSubjects.isEmpty()) {
             throw new IllegalArgumentException("当前班级未配置课程，不能生成成绩单");
         }
-        List resultClassSubjectIds = results.stream().map(result -> this.optionalLong((Map<String, Object>)result, "classSubjectId")).filter(Objects::nonNull).collect(Collectors.toList());
-        List missingSubjectNames = classSubjects.stream().filter(subject -> this.optionalLong((Map<String, Object>)subject, "id") != null).filter(subject -> !resultClassSubjectIds.contains(this.optionalLong((Map<String, Object>)subject, "id"))).map(subject -> Objects.toString(subject.get("subjectName"), "未知课程")).collect(Collectors.toList());
+        // 按 subjectId（科目逻辑ID）比较，而非 classSubjectId（关联表主键），
+        // 以兼容学生换班后旧成绩的 classSubjectId 与新班级不匹配的场景
+        Set<Long> resultSubjectIds = results.stream()
+            .map(result -> this.optionalLong((Map<String, Object>) result, "subjectId"))
+            .filter(Objects::nonNull)
+            .collect(Collectors.toSet());
+        List missingSubjectNames = classSubjects.stream()
+            .filter(subject -> {
+                Long subjectId = this.optionalLong((Map<String, Object>) subject, "subjectId");
+                return subjectId != null && !resultSubjectIds.contains(subjectId);
+            })
+            .map(subject -> Objects.toString(subject.get("subjectName"), "未知课程"))
+            .collect(Collectors.toList());
         if (!missingSubjectNames.isEmpty()) {
-            throw new IllegalArgumentException("以下课程尚未录入成绩，不能生成成绩单：" + String.join((CharSequence)"、", missingSubjectNames));
+            throw new IllegalArgumentException("以下课程尚未录入成绩，不能生成成绩单：" + String.join((CharSequence) "、", missingSubjectNames));
         }
     }
 
@@ -307,10 +325,8 @@ extends SchoolBaseService {
             sql.append(" AND r.academic_term_id = ?");
             args.add(academicTermId);
         }
-        if (classId != null) {
-            sql.append(" AND cs.class_id = ?");
-            args.add(classId);
-        }
+        // 不再按 classId 过滤成绩：学生换班后，旧成绩的 class_subject 属于原班级，
+        // 但成绩单生成需要汇总该学生所有成绩，并按科目检测缺失情况
         if (studentId != null) {
             sql.append(" AND r.student_id = ?");
             args.add(studentId);
@@ -406,26 +422,37 @@ extends SchoolBaseService {
                 if (a.getHonorTypeId() == null || honorTypeNames.containsKey(a.getHonorTypeId())) continue;
                 this.honorTypeRepository.findById(a.getHonorTypeId()).ifPresent(ht -> honorTypeNames.put(ht.getId(), ht.getHonorTypeName()));
             }
-            TranscriptPdfWriter writer = new TranscriptPdfWriter(document, serifRegular, serifBold, headerFont, logoImage, watermarkImage, this.schoolNameZh, this.schoolNameEn, this.schoolAddressZh, this.schoolAddressEn, this.schoolPhone, this.schoolPostCode, achievements, honorTypeNames, examTypeName);
-            writer.writeReportTitle(examTypeName);
-            writer.writeStudentInfoTable(Objects.toString(student.get("studentName"), ""), Objects.toString(student.get("studentNo"), ""), Objects.toString(clazz.get("gradeName"), Objects.toString(clazz.get("gradeLevel"), "")), Objects.toString(clazz.get("className"), ""), Objects.toString(term.get("academicYear"), ""), Objects.toString(term.get("termName"), ""));
+            String advisorName = Objects.toString(clazz.get("headTeacherName"), "未配置");
+            String studentName = Objects.toString(student.get("studentName"), "");
             ArrayList<GradeResult> grades = new ArrayList<GradeResult>();
             for (Map<String, Object> result : results) {
                 double score = TranscriptService.parseScore(Objects.toString(result.get("score"), ""));
                 double maxScore = TranscriptService.parseScore(Objects.toString(result.get("maxScore"), "100"));
                 grades.add(GradeCalculator.calculate(score, maxScore));
             }
-            writer.writeScoreTable(results, grades);
-            writer.writeAchievements();
-            String advisorName = Objects.toString(clazz.get("headTeacherName"), "未配置");
-            String studentName = Objects.toString(student.get("studentName"), "");
-            for (Map<String, Object> result : results) {
-                String teacherName = Objects.toString(result.get("teacherName"), Objects.toString(result.get("evaluatorName"), "未配置"));
-                writer.writeCommentBlock(studentName, advisorName, Objects.toString(result.get("subjectName"), ""), teacherName, Objects.toString(result.get("performanceComment"), ""), Objects.toString(result.get("strengths"), ""), Objects.toString(result.get("improvementPoints"), ""));
+            try (TranscriptPdfWriter writer = new TranscriptPdfWriter(document, serifRegular, serifBold, headerFont, logoImage, watermarkImage, this.schoolNameZh, this.schoolNameEn, this.schoolAddressZh, this.schoolAddressEn, this.schoolPhone, this.schoolPostCode, achievements, honorTypeNames, examTypeName);) {
+                writer.writeReportTitle(examTypeName);
+                writer.writeStudentInfoTable(studentName, Objects.toString(student.get("studentNo"), ""), Objects.toString(clazz.get("gradeName"), Objects.toString(clazz.get("gradeLevel"), "")), Objects.toString(clazz.get("className"), ""), Objects.toString(term.get("academicYear"), ""), Objects.toString(term.get("termName"), ""));
+                writer.writeScoreTable(results, grades);
+                writer.writeAchievements();
+                // 各科教师评语：学生姓名和班主任只在第一个 block 中显示
+                boolean isFirst = true;
+                for (Map<String, Object> result : results) {
+                    String teacherName = Objects.toString(result.get("teacherName"), Objects.toString(result.get("evaluatorName"), "未配置"));
+                    String subjectName = Objects.toString(result.get("subjectName"), "");
+                    String perfComment = Objects.toString(result.get("performanceComment"), "");
+                    String strengths = Objects.toString(result.get("strengths"), "");
+                    String improvements = Objects.toString(result.get("improvementPoints"), "");
+                    if (isFirst) {
+                        writer.writeCommentBlock(studentName, advisorName, subjectName, teacherName, perfComment, strengths, improvements);
+                        isFirst = false;
+                    } else {
+                        writer.writeSubjectCommentBlock(subjectName, teacherName, perfComment, strengths, improvements);
+                    }
+                }
+                writer.writeOverallComment(studentName, advisorName, Objects.toString(comment.get("overallComment"), "无"), Objects.toString(comment.get("strengths"), ""), Objects.toString(comment.get("improvementPoints"), ""));
+                writer.writeClosingNote();
             }
-            writer.writeOverallComment(studentName, advisorName, Objects.toString(comment.get("overallComment"), "无"), Objects.toString(comment.get("strengths"), ""), Objects.toString(comment.get("improvementPoints"), ""));
-            writer.writeClosingNote();
-            writer.close();
             Files.createDirectories(path.getParent(), new FileAttribute[0]);
             try (OutputStream outputStream = Files.newOutputStream(path, new OpenOption[0]);){
                 document.save(outputStream);
@@ -931,7 +958,7 @@ extends SchoolBaseService {
                     codePoint = paragraph.codePointAt(offset);
                     String next = new String(Character.toChars(codePoint));
                     String candidate = current + next;
-                    if (current.length() > 0 && font.getStringWidth(candidate) / 1000.0f * (float)fontSize > maxWidth) {
+                    if (current.length() > 0 && font.getStringWidth(this.cleanPdfText(candidate)) / 1000.0f * (float)fontSize > maxWidth) {
                         lines.add(current.toString());
                         current.setLength(0);
                     }
@@ -966,6 +993,30 @@ extends SchoolBaseService {
             String combined = sb.length() > 0 ? sb.toString() : "无";
             this.ensureSpace(120.0f);
             this.writeTableRow(new String[]{"学生姓名", TranscriptPdfWriter.safeText(studentName), "班主任", TranscriptPdfWriter.safeText(advisor)}, new float[]{75.0f, 190.0f, 75.0f, 155.0f}, true);
+            this.writeTableRow(new String[]{"课程", TranscriptPdfWriter.safeText(subject), "任课老师", TranscriptPdfWriter.safeText(teacher)}, new float[]{75.0f, 190.0f, 75.0f, 155.0f}, false);
+            this.writeTableRow(new String[]{"评语", combined}, new float[]{75.0f, 420.0f}, false);
+            this.writeBlankLine();
+        }
+
+        void writeSubjectCommentBlock(String subject, String teacher, String performanceComment, String strengths, String improvements) throws IOException {
+            StringBuilder sb = new StringBuilder();
+            if (TranscriptPdfWriter.hasText(performanceComment)) {
+                sb.append(performanceComment);
+            }
+            if (TranscriptPdfWriter.hasText(strengths)) {
+                if (sb.length() > 0) {
+                    sb.append("\n\n");
+                }
+                sb.append("优点：").append(strengths);
+            }
+            if (TranscriptPdfWriter.hasText(improvements)) {
+                if (sb.length() > 0) {
+                    sb.append("\n\n");
+                }
+                sb.append("需改进：").append(improvements);
+            }
+            String combined = sb.length() > 0 ? sb.toString() : "无";
+            this.ensureSpace(100.0f);
             this.writeTableRow(new String[]{"课程", TranscriptPdfWriter.safeText(subject), "任课老师", TranscriptPdfWriter.safeText(teacher)}, new float[]{75.0f, 190.0f, 75.0f, 155.0f}, false);
             this.writeTableRow(new String[]{"评语", combined}, new float[]{75.0f, 420.0f}, false);
             this.writeBlankLine();
@@ -1246,7 +1297,14 @@ extends SchoolBaseService {
         }
 
         private String cleanPdfText(String text) {
-            return text == null ? "" : text.replace('\n', ' ').replace('\r', ' ');
+            if (text == null) {
+                return "";
+            }
+            // NFKC normalization converts compatibility characters to canonical equivalents:
+            // e.g. subscript ₁ (U+2081) → 1, superscript ⁿ (U+207F) → n, fullwidth A (U+FF21) → A
+            // This prevents "No glyph for U+XXXX" errors when fonts lack these glyphs.
+            String cleaned = java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFKC);
+            return cleaned.replace('\n', ' ').replace('\r', ' ');
         }
 
         private void ensureSpace(float lineHeight) throws IOException {
@@ -1359,7 +1417,7 @@ extends SchoolBaseService {
                 this.content.setGraphicsStateParameters(gs);
             }
             catch (IOException iOException) {
-                // empty catch block
+                log.warn("Failed to draw watermark image: {}", (Object)iOException.getMessage());
             }
         }
 

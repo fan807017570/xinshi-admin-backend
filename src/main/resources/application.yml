@@ -22,8 +22,8 @@ xinshi:
     address-zh: 江西省上饶市广丰县吴村镇
     phone: 0793-2928080
   transcript:
-    # 成绩单 PDF 文件输出目录
-    output-dir: ${xinshi.scheool.transcript.output-dir}
+    # 成绩单 PDF 文件输出目录（可通过 profile 覆盖）
+    output-dir: ./data/xinshi/results/
   deepseek:
     # DeepSeek API Key，通过环境变量 DEEPSEEK_API_KEY 注入，不配置则不启用润色功能
     api-key: ${DEEPSEEK_API_KEY:}
