@@ -1,6 +1,6 @@
 # 班级成绩统计 — 领域建模设计文档
 
-> 版本：v2.1 | 日期：2026-08-03 | 作者：Anran Fan
+> 版本：v2.2 | 日期：2026-08-04 | 作者：Anran Fan
 
 ---
 
@@ -15,6 +15,7 @@
 7. [接口与展现](#7-接口与展现)
 8. [文件变更与依赖](#8-文件变更与依赖)
 9. [验证方案](#9-验证方案)
+10. [前瞻展望](#10-前瞻展望非本期范围)
 
 ---
 
@@ -46,6 +47,10 @@
 | **班级总分** StudentTotalScore | 一个学生在某次考试中所有科目的得分加总 | **本次新增** |
 | **班级成绩报告** ClassScoreReport | 一次查询的聚合根，包含统计总览、各科统计、分布图、偏科分析 | **本次新增** |
 | **偏科记录** WeaknessItem | 总分高于班级平均分但单科低于该科平均分的学生+科目组合 | **本次新增** |
+| **反向偏科记录** ReverseWeaknessItem | 总分低于班级平均分但单科远高于该科平均分的学生+科目组合（严重偏科导致总分被拉低） | **本次新增** |
+| **偏科差距阈值** WeaknessGapThreshold | 单科分数低于/高于科目平均分的差距倍数阈值，默认为 `1.0 × stdDev`，避免微小波动被误报为偏科 | **本次新增** |
+| **标准分** ScaledScore | 将不同满分值的原始分按比例折算到统一满分（如百分制），使跨科目总分可比。`scaled = raw / maxScore × 100` | **本次新增** |
+| **原始总分** RawTotalScore | 各科原始分直接加总的总分（不折算），保留科目权重差异 | **本次新增** |
 | **及格线** PassLine | = `maxScore × 0.6` | **本次新增** |
 
 ---
@@ -161,9 +166,15 @@ package "班级成绩统计上下文 (新增)" #F0FDFA {
     + subjectCount: int
     + totalAvg: double
     + totalMedian: double
+    + scoreMode: enum(Raw, Scaled100)
+    + resultCount: int
+    + truncated: boolean
     --
     聚合根，一次查询的完整报告
     Lifecycle: 请求内瞬态
+    I7: resultCount ≤ MAX_RESULTS (2000)
+    I8: 若 truncated=true，仅展示前
+        MAX_RESULTS 条的计算结果
   }
 
   class SubjectStatistics <<Value Object>> {
@@ -173,6 +184,7 @@ package "班级成绩统计上下文 (新增)" #F0FDFA {
     + maxScore: double
     + avgScore: double
     + medianScore: double
+    + stdDev: double
     + maxResult: double
     + minResult: double
     + passLine: double
@@ -200,23 +212,44 @@ package "班级成绩统计上下文 (新增)" #F0FDFA {
     + subjectAvg: double
     + gap: double
     --
+    正向偏科:
     约束: totalScore > 班级总分平均
-      AND score < 该科平均分
+      AND (subjectAvg - score) ≥ 1.0 × subjectStdDev
+  }
+
+  class ReverseWeaknessItem <<Value Object>> {
+    + studentId: long
+    + studentName: string
+    + totalScore: double
+    + strongSubjectName: string
+    + score: double
+    + subjectAvg: double
+    + gap: double
+    --
+    反向偏科:
+    约束: totalScore < 班级总分平均
+      AND (score - subjectAvg) ≥ 1.0 × subjectStdDev
   }
 }
 
 ClassScoreReport "1" -- "*" SubjectStatistics : 包含 >
 SubjectStatistics "1" -- "*" ScoreBucket : 分布 >
-ClassScoreReport "1" -- "*" WeaknessItem : 分析 >
+ClassScoreReport "1" -- "*" WeaknessItem : 正向偏科 >
+ClassScoreReport "1" -- "*" ReverseWeaknessItem : 反向偏科 >
 
 note right of ClassScoreReport
   <b>不变性约束:</b>
   I1: SubjectStatistics.totalStudents ≤ studentCount
   I2: Σ ScoreBucket.percent ≈ 100
   I3: passLine = maxScore × 0.6
-  I4: WeaknessItem 双向条件过滤
+  I4: WeaknessItem: totalScore > totalAvg
+       AND gap ≥ 1.0 × stdDev
+  I4r: ReverseWeaknessItem: totalScore < totalAvg
+        AND gap ≥ 1.0 × stdDev
   I5: subjectStats 数量 = subjectCount
   I6: 单一考试类型上下文
+  I7: resultCount ≤ MAX_RESULTS (2000)
+  I8: scoreMode = Raw | Scaled100
 end note
 
 @enduml
@@ -340,7 +373,13 @@ skinparam noteBackgroundColor #FFFBEB
 
 component "ClassScoreReportBuilder" as Builder <<Domain Service>> #0F766E {
   
-  () "build(rawResults)" as Entry
+  () "build(rawResults, scoreMode)" as Entry
+
+  folder "Step 0: 前置校验" as S0 {
+    [assert examTypeId 非空]
+    [assert resultCount ≤ 2000]
+    [若超限: truncated=true]
+  }
 
   folder "Step 1: 分组" as S1 {
     [groupBySubject]
@@ -349,13 +388,14 @@ component "ClassScoreReportBuilder" as Builder <<Domain Service>> #0F766E {
   folder "Step 2: 科目统计 × N" as S2 {
     [calcAvg]
     [calcMedian]
+    [calcStdDev]
     [calcExtremes]
     [calcPassRate]
     [buildBuckets]
   }
 
   folder "Step 3: 学生总分" as S3 {
-    [calcStudentTotalScores]
+    [calcStudentTotalScores\nraw / scaled100]
   }
 
   folder "Step 4-5: 班级总览" as S4 {
@@ -364,7 +404,7 @@ component "ClassScoreReportBuilder" as Builder <<Domain Service>> #0F766E {
   }
 
   folder "Step 6: 偏科分析" as S6 {
-    [findWeaknessItems]
+    [findWeaknessItems\n正向 + 反向]
   }
 
   folder "Step 7: 组装" as S7 {
@@ -372,7 +412,8 @@ component "ClassScoreReportBuilder" as Builder <<Domain Service>> #0F766E {
   }
 }
 
-Entry --> S1
+Entry --> S0
+S0 --> S1
 S1 --> S2
 S2 --> S3
 S3 --> S4
@@ -381,10 +422,16 @@ S6 --> S7
 S7 --> [ClassScoreReport]
 
 note right of Builder
-  <b>输入:</b> List<CourseResult>
+  <b>输入:</b> List<CourseResult>, scoreMode
   <b>输出:</b> ClassScoreReport 聚合根
   <b>位置:</b> 前端 ClassStatsView.vue 内
   <b>性质:</b> 纯函数，无副作用
+  --
+  <b>MAX_RESULTS = 2000</b>
+  约 50 人 × 40 科次（含多考次）
+  <b>scoreMode = Raw | Scaled100</b>
+  Raw: 原始分直接加总
+  Scaled100: 折算百分制后加总
 end note
 
 @enduml
@@ -416,31 +463,86 @@ FUNCTION buildBuckets(scores[], minScore, maxScore, binSize = 5)
   RETURN bins
 ```
 
-#### findWeaknessItems — 偏科识别
+#### calcStudentTotalScores — 学生总分
 
 ```
-FUNCTION findWeaknessItems(rawResults[], subjectStats[], totalAvg)
-  studentTotals = GROUP rawResults BY studentId
-                    MAP (id, SUM of scores)
+FUNCTION calcStudentTotalScores(rawResults[], scoreMode)
+  studentTotals = GROUP rawResults BY studentId MAP {
+    id:     studentId,
+    name:   studentName,
+    scores: COLLECT { subjectId, subjectName, score, maxScore },
+  }
 
-  topStudents = FILTER studentTotals WHERE totalScore > totalAvg
+  IF scoreMode == Scaled100:
+    // 折算百分制：各科除以满分再乘 100
+    FOR EACH student IN studentTotals:
+      scaledSum = 0
+      FOR EACH score IN student.scores:
+        scaledSum += score.score / score.maxScore * 100
+      student.totalScore = scaledSum
+  ELSE:
+    // Raw：原始分直接加总（保留科目权重差异）
+    FOR EACH student IN studentTotals:
+      student.totalScore = SUM(student.scores.score)
 
-  items = []
-  FOR EACH (studentId, totalScore) IN topStudents:
-    FOR EACH score IN studentId.scores:
+  RETURN studentTotals
+```
+
+**注意**：`Raw` 模式下，满分高的科目（如语文 150）在总分中权重更大，年级横向对比时可选择 `Scaled100` 消除权重差异。
+
+---
+
+#### findWeaknessItems — 偏科识别（正向 + 反向）
+
+```
+CONST THRESHOLD_MULTIPLIER = 1.0  // stdDev 倍数阈值
+
+FUNCTION findWeaknessItems(rawResults[], subjectStats[], studentTotals[], totalAvg)
+  forwardItems  = []   // 正向偏科：总分高但单科低
+  reverseItems  = []   // 反向偏科：总分低但单科高
+
+  FOR EACH student IN studentTotals:
+    FOR EACH score IN student.scores:
       stat = FIND subjectStats WHERE subjectId = score.subjectId
       IF stat == null: SKIP
-      IF score < stat.avgScore:
-        items.ADD(WeaknessItem{
-          studentId, studentName,
-          totalScore, weakSubjectName: stat.subjectName,
-          score, subjectAvg: stat.avgScore,
-          gap: stat.avgScore - score
+
+      gap = score.score - stat.avgScore    // 正=高于平均，负=低于平均
+      threshold = THRESHOLD_MULTIPLIER * stat.stdDev
+
+      // 正向偏科：总分高于平均，单科显著低于该科平均
+      IF student.totalScore > totalAvg AND -gap ≥ threshold:
+        forwardItems.ADD(WeaknessItem{
+          studentId:    student.id,
+          studentName:  student.name,
+          totalScore:   student.totalScore,
+          weakSubjectName: stat.subjectName,
+          score:        score.score,
+          subjectAvg:   stat.avgScore,
+          gap:          -gap
         })
 
-  SORT items BY gap DESC
-  RETURN items
+      // 反向偏科：总分低于平均，但单科显著高于该科平均
+      IF student.totalScore < totalAvg AND gap ≥ threshold:
+        reverseItems.ADD(ReverseWeaknessItem{
+          studentId:          student.id,
+          studentName:        student.name,
+          totalScore:         student.totalScore,
+          strongSubjectName:  stat.subjectName,
+          score:              score.score,
+          subjectAvg:         stat.avgScore,
+          gap:                gap
+        })
+
+  SORT forwardItems BY gap DESC
+  SORT reverseItems BY gap DESC
+  RETURN { forwardItems, reverseItems }
 ```
+
+**说明**：
+- 使用 `stdDev` 作为阈值基准，避免微小波动（如差 0.5 分）被误报为偏科
+- 正向偏科用于发现「看似总分不错，但某科拖后腿」的学生
+- 反向偏科用于发现「总分被其他弱科拖累，但某科特别突出」的学生（这类学生总分低容易被忽略）
+- `THRESHOLD_MULTIPLIER` 可在后续根据实际数据调优
 
 ---
 
@@ -464,6 +566,7 @@ database "Backend\n/api/student-results" as Backend
 Teacher -> View : 选择学期、班级、考试类型\n点击「查询」
 activate View
 
+View -> View : 校验 examTypeId 非空\n(UI 层: 未选时按钮 disabled)
 View -> Api : listStudentResults({\n  academicTermId, classId, examTypeId\n})
 activate Api
 
@@ -475,8 +578,10 @@ deactivate Backend
 Api --> View : rawResults[]
 deactivate Api
 
-View -> Builder : build(rawResults)
+View -> Builder : build(rawResults, scoreMode)
 activate Builder
+
+Builder -> Builder : Step0: assert examTypeId 非空\nassert resultCount ≤ 2000
 
 Builder -> Builder : Step1: groupBySubject(rawResults)
 Builder -> Builder : Step2: forEach subject\n  calcAvg, calcMedian\n  calcExtremes, calcPassRate\n  buildBuckets
@@ -551,7 +656,13 @@ error      --> loading : 重新查询
 | `/api/classes` | GET | 班级列表（已做角色权限过滤） |
 | `/api/exam-types` | GET | 考试类型列表 |
 
-> ⚠️ `examTypeId` 在本功能中为**必选**，避免多考次数据混叠导致统计失真。
+> ⚠️ **双重防护**：
+> 1. **UI 层**：考试类型下拉为必选项，未选择时「查询」按钮 disabled
+> 2. **Builder 层**：`build()` 入口 assert `examTypeId != null`，非法调用直接抛出 `"请选择考试类型"`
+>
+> **原因**：后端 API 所有参数 `required=false`，若前端校验遗漏会导致多考次数据混叠，所有统计（均值、分布、偏科）失真。
+>
+> ⚠️ **数据量限制**：`MAX_RESULTS = 2000`。当 API 返回超过 2000 条时，Builder 截断数据并设置 `truncated = true`，页面展示警告提示「数据量过大，仅展示前 2000 条结果」。
 
 ### 7.2 页面组件树
 
@@ -566,8 +677,13 @@ component ClassStatsView {
   component "FilterPanel\n(筛选区)" as Filter {
     [学期下拉]
     [班级下拉]
-    [考试类型下拉]
+    [考试类型下拉(必选)]
+    [分数模式: Raw / Scaled100]
     [查询按钮]
+  }
+
+  component "TruncatedWarning\n(数据截断提示)" as Warn {
+    [数据量过大警告条]
   }
 
   component "OverviewCards\n(.metrics 4列)" as Cards {
@@ -578,7 +694,7 @@ component ClassStatsView {
   }
 
   component "SubjectStatsTable\n(科目统计表)" as Table {
-    [科目|平均分|中位数|...]
+    [科目|平均分|中位数|标准差|...]
   }
 
   component "ChartGrid\n(柱状图区)" as Charts {
@@ -589,10 +705,12 @@ component ClassStatsView {
   }
 
   component "WeaknessPanel\n(偏科分析)" as Weakness {
-    [学生|总分|薄弱科目|...]
+    [正向偏科: 学生|总分|薄弱科目]
+    [反向偏科: 学生|总分|突出科目]
   }
 }
 
+Filter -down-> Warn : truncated 时显示
 Filter -down-> Cards : 查询结果驱动
 Filter -down-> Table
 Filter -down-> Charts
@@ -716,10 +834,97 @@ end note
 | 编号 | 验证项 | 方法 | 预期 |
 |------|--------|------|------|
 | V1 | 路由可达 | 访问 `/class-stats` | 页面正常渲染 |
-| V2 | 聚合计算 | 准备已知数据集，人工计算各项统计 | 与页面结果一致 |
-| V3 | 分数段完整性 | 检查 buckets 的 percent 总和 | ≈ 100（±1） |
-| V4 | 偏科分析 | 人工筛选符合条件的学生 | 页面结果一致 |
-| V5 | 不变性约束 | 逐一验证 I1–I6 | 全部满足 |
-| V6 | 空状态 | 选择无成绩班级 | 显示空状态提示 |
-| V7 | 权限安全 | 以不同角色登录验证 | API 返回范围受限 |
-| V8 | 柱状图渲染 | 检查各科 bin 划分 | 正确，hover 信息完整 |
+| V2 | 聚合计算 Raw | 准备 3 科已知成绩，scoreMode=Raw | 均值/中位数/分布与人工 Excel 一致 |
+| V3 | 聚合计算 Scaled100 | 同数据，scoreMode=Scaled100 | 语 150/数 150/英 120 满分折算后总分权重一致 |
+| V4 | 分数段完整性 | 检查 buckets 的 percent 总和 | ≈ 100（±1） |
+| V5 | 分数段边界 | 测试 score==60.0（bin 边界）、score==100.0（满分） | 正确落入对应 bin |
+| V6 | 正向偏科 | 人工构建总分>均分且单科低于均分的学生 | 正确检出 |
+| V7 | 反向偏科 | 人工构建总分<均分但单科远高于均分的学生 | 正确检出 |
+| V8 | 偏科阈值 | 构造差 0.5 分的微小波动数据 | 不被误报（stdDev 过滤生效） |
+| V9 | 不变性约束 | 逐一验证 I1–I8 | 全部满足 |
+| V10 | 空状态 | 选择无成绩班级 | 显示空状态提示 |
+| V11 | examTypeId 未选 | 考试类型下拉为空时点击查询 | 按钮 disabled，不可触发 |
+| V12 | examTypeId 绕过 | 直接调用 build() 不传 examTypeId | assert 失败，抛出明确错误 |
+| V13 | 数据超限 | Mock 2001 条结果 | 页面展示截断警告，truncated=true |
+| V14 | 权限安全 | 以不同角色登录验证 | API 返回范围受限 |
+| V15 | 柱状图渲染 | 检查各科 bin 划分 | 正确，hover 信息完整 |
+
+---
+
+## 10. 前瞻展望（非本期范围）
+
+以下方向为设计时已识别但不在本期实施范围的长期演进建议，供后续迭代参考。
+
+### 10.1 后端聚合（性能与可扩展性）
+
+当前方案在前端完成全部聚合计算。随班级人数和科目数量增长，建议将聚合逻辑下推到 SQL 层，新增 `GET /api/class-stats` 端点：
+
+```
+SELECT subject_id,
+       AVG(score), STDDEV(score), PERCENTILE_CONT(0.5), MAX(score), MIN(score)
+FROM school_student_course_result
+WHERE ... GROUP BY subject_id
+```
+
+- **优势**：仅传输聚合结果（~KB 级），消除全量数据传输和前端阻塞
+- **触发条件**：单次查询 resultCount > 500 或前端渲染出现可感知延迟
+- **保持兼容**：前端 `ClassScoreReportBuilder` 接口不变，在 Api 层增加分支判断
+
+### 10.2 数据快照与历史对比
+
+允许班主任将一次统计结果保存为快照：
+
+- **新增表** `school_class_stats_snapshot(id, classId, termId, examTypeId, reportJson, createdAt)`
+- **对比视图**：选择两个快照（或两个考试类型）并排展示，高亮进退步变化
+- **年级汇总**：基于快照表一键生成年级整体报告（各班横向对比）
+
+### 10.3 排名与百分位
+
+- **班级排名**：按总分排序输出学生在班内排名
+- **百分位**：计算每个学生在班内的百分位 `percentile = (rank - 1) / (total - 1) × 100`
+- **隐私考虑**：排名仅对班主任和教师可见，家长端不展示
+
+### 10.4 学生 Drill-Down
+
+点击偏科列表或科目统计表中任意学生，展开该生的完整各科雷达图/详情卡片，实现「班级 → 学生」下钻分析闭环。
+
+### 10.5 Web Worker 聚合
+
+在尚未切换到后端聚合前，将 `ClassScoreReportBuilder.build()` 移至 Web Worker 线程：
+
+- 避免大数据量下 UI 线程阻塞（loading spinner 卡住）
+- Worker 内完成计算后 `postMessage` 返回 `ClassScoreReport`
+- 与主线程 Builder 接口一致，零架构变更
+
+### 10.6 自适应 BinSize
+
+当前 `buildBuckets` 固定 `binSize = 5`。未来可根据满分范围动态计算：
+
+```
+binSize = CEIL((maxScore - minScore) / 10)
+// 0-100: binSize=10 → ~10 个 bin
+// 0-150: binSize=15 → ~10 个 bin
+```
+
+保证柱状图在任何满分范围下都有 ~10 个 bin，兼顾分辨率和可读性。
+
+### 10.7 数据导出
+
+- **CSV 导出**：科目统计表一键导出，供教师在 Excel 中进一步处理
+- **PDF 快照**：复用现有成绩单 PDF 生成能力，将统计报告生成为可打印文档
+- **打印优化**：CSS `@media print` 样式，隐藏侧边栏、按钮等交互元素
+
+### 10.8 图表交互增强
+
+- **Hover tooltip**：柱状图 hover 显示具体人数和百分比
+- **联动筛选**：点击柱状图某分数段 → 下方表格高亮该段学生
+- **色觉无障碍**：使用色盲安全色板 `#0F766E`/`#D97706`，辅以纹理/图案区分
+
+### 10.9 小样本置信度提示
+
+当班级人数较小时（如 < 10 人），在报告顶部展示提示：
+
+> "当前班级仅 8 人，统计指标（均值、标准差、偏科分析）可能不具代表性，建议结合个体表现综合判断。"
+
+- **阈值**：studentCount < 10
+- **不影响计算**：仅增加提示信息，不改变任何算法行为

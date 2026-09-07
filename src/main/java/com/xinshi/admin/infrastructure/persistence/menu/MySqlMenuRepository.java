@@ -35,12 +35,23 @@ implements MenuRepository {
         if (roleCodes == null || roleCodes.isEmpty()) {
             return Collections.emptyList();
         }
+        // Always compute the fallback base set — ensures new menus appear
+        // even before the DML (sys_role_menu rows) is executed.
+        List<String> fallback = this.findMenuCodesByRolesFallback(roleCodes);
         try {
             String placeholders = roleCodes.stream().map(c -> "?").collect(Collectors.joining(","));
-            return this.jdbcTemplate.queryForList("SELECT DISTINCT rm.menu_code FROM sys_role_menu rm JOIN sys_role r ON r.role_code = rm.role_code AND r.status = 1 JOIN sys_menu m ON m.menu_code = rm.menu_code AND m.status = 1 WHERE rm.role_code IN (" + placeholders + ") ORDER BY (SELECT m2.sort_order FROM sys_menu m2 WHERE m2.menu_code = rm.menu_code)", String.class, roleCodes.toArray());
+            List<String> dbMenus = this.jdbcTemplate.queryForList("SELECT DISTINCT rm.menu_code FROM sys_role_menu rm JOIN sys_role r ON r.role_code = rm.role_code AND r.status = 1 JOIN sys_menu m ON m.menu_code = rm.menu_code AND m.status = 1 WHERE rm.role_code IN (" + placeholders + ") ORDER BY (SELECT m2.sort_order FROM sys_menu m2 WHERE m2.menu_code = rm.menu_code)", String.class, roleCodes.toArray());
+            // Merge DB result with fallback so that newly added menus always appear
+            List<String> merged = new ArrayList<>(fallback);
+            for (String menu : dbMenus) {
+                if (!merged.contains(menu)) {
+                    merged.add(menu);
+                }
+            }
+            return merged;
         }
         catch (Exception e) {
-            return this.findMenuCodesByRolesFallback(roleCodes);
+            return fallback;
         }
     }
 
@@ -51,14 +62,14 @@ implements MenuRepository {
             return menus;
         }
         if (roleCodes.contains("SUPER_ADMIN")) {
-            Collections.addAll(menus, "config", "users", "classes", "students", "scores", "transcripts", "parents");
+            Collections.addAll(menus, "config", "users", "classes", "students", "scores", "classStats", "transcripts", "parents");
             return menus;
         }
         if (roleCodes.contains("HEAD_TEACHER")) {
-            Collections.addAll(menus, "classes", "students", "scores", "transcripts", "parents");
+            Collections.addAll(menus, "classes", "students", "scores", "classStats", "transcripts", "parents");
         }
         if (roleCodes.contains("TEACHER")) {
-            Collections.addAll(menus, "scores");
+            Collections.addAll(menus, "scores", "classStats");
         }
         if (roleCodes.contains("PARENT")) {
             Collections.addAll(menus, "parents", "transcripts");

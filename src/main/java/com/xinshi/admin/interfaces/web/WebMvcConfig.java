@@ -10,6 +10,7 @@
 package com.xinshi.admin.interfaces.web;
 
 import com.xinshi.admin.interfaces.web.security.AuthInterceptor;
+import com.xinshi.admin.infrastructure.security.H5AuthInterceptor;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.HandlerInterceptor;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
@@ -19,13 +20,18 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class WebMvcConfig
 implements WebMvcConfigurer {
     private final AuthInterceptor authInterceptor;
+    private final H5AuthInterceptor h5AuthInterceptor;
 
-    public WebMvcConfig(AuthInterceptor authInterceptor) {
+    public WebMvcConfig(AuthInterceptor authInterceptor, H5AuthInterceptor h5AuthInterceptor) {
         this.authInterceptor = authInterceptor;
+        this.h5AuthInterceptor = h5AuthInterceptor;
     }
 
     public void addInterceptors(InterceptorRegistry registry) {
-        registry.addInterceptor((HandlerInterceptor)this.authInterceptor).addPathPatterns(new String[]{"/api/**"});
+        registry.addInterceptor((HandlerInterceptor)this.h5AuthInterceptor)
+                .addPathPatterns(new String[]{"/api/h5/**"});
+        registry.addInterceptor((HandlerInterceptor)this.authInterceptor)
+                .addPathPatterns(new String[]{"/api/**"})
+                .excludePathPatterns(new String[]{"/api/h5/**", "/api/internal/wechat/**"});
     }
 }
-

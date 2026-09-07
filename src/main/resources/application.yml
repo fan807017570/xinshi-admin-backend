@@ -35,6 +35,40 @@ logging:
   level:
     com.xinshi.admin: INFO
 
+h5:
+  score-query:
+    enabled: ${H5_SCORE_QUERY_ENABLED:false}
+  cookie:
+    secure: ${H5_COOKIE_SECURE:true}
+  session:
+    ttl-seconds: ${H5_SESSION_TTL_SECONDS:3600}
+  oauth-state:
+    ttl-seconds: 300
+  wechat-identity:
+    lookup-hmac-secret: ${H5_WECHAT_LOOKUP_SECRET:}
+    encryption-secret: ${H5_WECHAT_ENCRYPTION_SECRET:}
+  query-context:
+    identity-hmac-secret: ${H5_QUERY_IDENTITY_SECRET:}
+    encryption-secret: ${H5_QUERY_ENCRYPTION_SECRET:}
+  sms:
+    mode: ${H5_SMS_MODE:disabled}
+    test-code: ${H5_SMS_TEST_CODE:}
+    code-hmac-secret: ${H5_SMS_CODE_SECRET:}
+  student-id:
+    hmac-secret: ${H5_STUDENT_ID_SECRET:}
+  guardian-mobile:
+    hmac-secret: ${H5_GUARDIAN_MOBILE_SECRET:}
 
+  wechat:
+    mock-enabled: ${WECHAT_OAUTH_MOCK_ENABLED:false}
+    mock-openid: ${WECHAT_OAUTH_MOCK_OPENID:mock-parent-openid}
+    mock-nickname: ${WECHAT_OAUTH_MOCK_NICKNAME:微信家长}
+
+internal:
+  xinshi-rag:
+    service-id: ${XINSHI_RAG_SERVICE_ID:xinshi-rag}
+    signing-secret: ${XINSHI_RAG_SIGNING_SECRET:}
+  request:
+    max-clock-skew-seconds: 300
 
 

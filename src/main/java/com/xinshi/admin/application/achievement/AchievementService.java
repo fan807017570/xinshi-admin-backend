@@ -8,6 +8,7 @@
  */
 package com.xinshi.admin.application.achievement;
 
+import com.xinshi.admin.application.h5.ParentContentLifecycleService;
 import com.xinshi.admin.application.school.AccessControlService;
 import com.xinshi.admin.domain.achievement.AchievementRepository;
 import com.xinshi.admin.domain.achievement.StudentAchievement;
@@ -28,11 +29,17 @@ public class AchievementService {
     private final AchievementRepository achievementRepository;
     private final HonorTypeRepository honorTypeRepository;
     private final AccessControlService accessControlService;
+    private final ParentContentLifecycleService lifecycleService;
 
-    public AchievementService(AchievementRepository achievementRepository, HonorTypeRepository honorTypeRepository, AccessControlService accessControlService) {
+    public AchievementService(
+            AchievementRepository achievementRepository,
+            HonorTypeRepository honorTypeRepository,
+            AccessControlService accessControlService,
+            ParentContentLifecycleService lifecycleService) {
         this.achievementRepository = achievementRepository;
         this.honorTypeRepository = honorTypeRepository;
         this.accessControlService = accessControlService;
+        this.lifecycleService = lifecycleService;
     }
 
     public List<Map<String, Object>> listAchievements(long studentId, long academicTermId) {
@@ -42,38 +49,45 @@ public class AchievementService {
     }
 
     public Map<String, Object> addAchievement(Map<String, Object> request) {
-        this.accessControlService.ensureCanGenerateTranscript();
         long academicTermId = this.requiredLong(request, "academicTermId");
         long studentId = this.requiredLong(request, "studentId");
         String achievementText = this.requiredString(request, "achievementText");
         int sortOrder = this.optionalInt(request, "sortOrder", 0);
         Long honorTypeId = this.optionalLong(request, "honorTypeId");
-        this.accessControlService.ensureCanAccessStudent(studentId);
-        StudentAchievement achievement = StudentAchievement.create(academicTermId, studentId, achievementText, sortOrder, honorTypeId);
-        StudentAchievement saved = this.achievementRepository.save(achievement);
-        log.info("学生荣誉已添加: studentId={}, honorTypeId={}, text={}", new Object[]{studentId, honorTypeId, achievementText});
-        return this.toMap(saved);
+        long id = this.lifecycleService.createAchievementDraft(
+                academicTermId, studentId, honorTypeId, achievementText, sortOrder);
+        log.info("Student achievement created, id={}, honorTypeId={}", id, honorTypeId);
+        LinkedHashMap<String, Object> result = new LinkedHashMap<String, Object>();
+        result.put("id", id);
+        result.put("academicTermId", academicTermId);
+        result.put("studentId", studentId);
+        result.put("honorTypeId", honorTypeId);
+        result.put("honorTypeName", this.resolveHonorTypeName(honorTypeId));
+        result.put("achievementText", achievementText.trim());
+        result.put("sortOrder", Math.max(sortOrder, 0));
+        return result;
     }
 
     public void deleteAchievement(long id) {
-        this.accessControlService.ensureCanGenerateTranscript();
-        this.achievementRepository.delete(id);
+        this.lifecycleService.deleteAchievement(id);
     }
 
     public Map<String, Object> updateAchievement(long id, Map<String, Object> request) {
-        this.accessControlService.ensureCanGenerateTranscript();
         String achievementText = this.requiredString(request, "achievementText");
         int sortOrder = this.optionalInt(request, "sortOrder", 0);
         Long honorTypeId = this.optionalLong(request, "honorTypeId");
-        StudentAchievement achievement = StudentAchievement.rehydrate(id, 0L, 0L, achievementText, sortOrder, honorTypeId, null);
-        this.achievementRepository.update(achievement);
-        log.info("学生荣誉已更新: id={}, honorTypeId={}, text={}", new Object[]{id, honorTypeId, achievementText});
+        this.lifecycleService.updateAchievementDraft(
+                id,
+                honorTypeId,
+                achievementText,
+                sortOrder);
+        log.info("Student achievement updated, id={}, honorTypeId={}", id, honorTypeId);
         LinkedHashMap<String, Object> result = new LinkedHashMap<String, Object>();
         result.put("id", id);
         result.put("honorTypeId", honorTypeId);
         result.put("honorTypeName", this.resolveHonorTypeName(honorTypeId));
         result.put("achievementText", achievementText);
-        result.put("sortOrder", sortOrder);
+        result.put("sortOrder", Math.max(sortOrder, 0));
         return result;
     }
 
@@ -141,4 +155,3 @@ public class AchievementService {
         return defaultValue;
     }
 }
-

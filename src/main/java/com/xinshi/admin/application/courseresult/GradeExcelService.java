@@ -1,6 +1,7 @@
 package com.xinshi.admin.application.courseresult;
 
 import com.xinshi.admin.application.commentpolish.CommentPolishService;
+import com.xinshi.admin.application.h5.ParentContentLifecycleService;
 import com.xinshi.admin.application.school.AccessControlService;
 import com.xinshi.admin.application.school.SchoolBaseService;
 import org.apache.poi.ss.usermodel.*;
@@ -32,13 +33,16 @@ public class GradeExcelService extends SchoolBaseService {
 
     private final CommentPolishService commentPolishService;
     private final AccessControlService accessControlService;
+    private final ParentContentLifecycleService lifecycleService;
 
     public GradeExcelService(JdbcTemplate jdbcTemplate,
                              CommentPolishService commentPolishService,
-                             AccessControlService accessControlService) {
+                             AccessControlService accessControlService,
+                             ParentContentLifecycleService lifecycleService) {
         super(jdbcTemplate);
         this.commentPolishService = commentPolishService;
         this.accessControlService = accessControlService;
+        this.lifecycleService = lifecycleService;
     }
 
     // ==================== 场景 A：单科成绩导出 ====================
@@ -288,11 +292,12 @@ public class GradeExcelService extends SchoolBaseService {
                 Map<String, Object> comment = commentMap.get(studentId);
                 List<Map<String, Object>> achievements = achievementMap.getOrDefault(studentId, Collections.emptyList());
 
-                // 固定 2 行
+                // 至少保留 2 行，同时完整导出已有荣誉，避免回导时误判为遗漏。
                 int startRow = rowNum;
-                int endRow = rowNum + 1; // 2行
+                int achievementRowCount = Math.max(2, achievements.size());
+                int endRow = rowNum + achievementRowCount - 1;
 
-                for (int r = 0; r < 2; r++) {
+                for (int r = 0; r < achievementRowCount; r++) {
                     Row row = sheet.createRow(rowNum);
                     row.setHeight(ROW_HEIGHT);
 
@@ -377,6 +382,7 @@ public class GradeExcelService extends SchoolBaseService {
         try (Workbook wb = new XSSFWorkbook(file.getInputStream())) {
             Sheet sheet = wb.getSheetAt(0);
             Map<Long, List<RowData>> studentRows = new LinkedHashMap<>();
+            List<ParentContentLifecycleService.ParentContentImportItem> importItems = new ArrayList<>();
 
             for (int i = 2; i <= sheet.getLastRowNum(); i++) {
                 Row row = sheet.getRow(i);
@@ -407,15 +413,14 @@ public class GradeExcelService extends SchoolBaseService {
                     RowData first = rows.get(0);
                     String oc = first.overallComment, st = first.strengths, ip = first.improvementPoints;
                     boolean hasComment = !isEmpty(oc), hasDetail = !isEmpty(st) || !isEmpty(ip);
+                    boolean hasAnyCommentContent = hasComment || hasDetail;
 
                     log.info("导入评语 studentId={}, overallComment=[{}], strengths=[{}], improvementPoints=[{}], hasComment={}",
                         first.studentId, oc, st, ip, hasComment);
 
-                    if (!hasComment && hasDetail) { failed++; errors.add(createError(first.rowNum, first.studentName, "总体评价不能为空")); continue; }
-
-                    if (hasComment) {
+                    if (hasAnyCommentContent) {
                         if (enableAiPolish) {
-                            oc = safePolish(oc); aiPolished++;
+                            if (!isEmpty(oc)) { oc = safePolish(oc); aiPolished++; }
                             if (!isEmpty(st)) { st = safePolish(st); aiPolished++; }
                             if (!isEmpty(ip)) { ip = safePolish(ip); aiPolished++; }
                         }
@@ -425,32 +430,65 @@ public class GradeExcelService extends SchoolBaseService {
                         if (cid == null) cid = findClassIdByStudent(first.studentId);
                         Long tid = first.academicTermId != null ? first.academicTermId : getDefaultAcademicTermId();
                         if (tid == null) throw new IllegalArgumentException("无法确定学期，请检查模版是否完整");
-                        log.info("保存评语 academicTermId={}, classId={}, studentId={}", tid, cid, first.studentId);
-                        upsertOverallComment(tid, cid, first.studentId, oc, st, ip, evaluatorUserId);
                     }
 
-                    // 先判断是否有荣誉需要导入，有则先清除该学生本学期已有荣誉再重新插入
                     boolean hasAnyAchievement = rows.stream().anyMatch(r -> !isEmpty(r.honorTypeName));
                     Long termId = first.academicTermId != null ? first.academicTermId : getDefaultAcademicTermId();
-                    if (hasAnyAchievement && termId != null) {
-                        deleteExistingAchievements(termId, first.studentId);
-                    }
-
+                    List<ParentContentLifecycleService.AchievementImportItem> achievementItems = new ArrayList<>();
+                    boolean achievementValidationFailed = false;
                     for (RowData rd : rows) {
                         boolean hasType = !isEmpty(rd.honorTypeName), hasText = !isEmpty(rd.achievementText);
-                        if (hasType != hasText) { failed++; errors.add(createError(rd.rowNum, rd.studentName, "荣誉类型和荣誉详细内容须同时填写")); continue; }
-                        if (!hasType) { if (rd == first && !hasComment) skipped++; continue; }
+                        if (hasType != hasText) {
+                            failed++;
+                            achievementValidationFailed = true;
+                            errors.add(createError(rd.rowNum, rd.studentName, "荣誉类型和荣誉详细内容须同时填写"));
+                            continue;
+                        }
+                        if (!hasType) { continue; }
 
                         Long honorTypeId = findHonorTypeId(rd.honorTypeName);
-                        if (honorTypeId == null) { failed++; errors.add(createError(rd.rowNum, rd.studentName, "荣誉类型 '" + rd.honorTypeName + "' 不存在")); continue; }
+                        if (honorTypeId == null) {
+                            failed++;
+                            achievementValidationFailed = true;
+                            errors.add(createError(rd.rowNum, rd.studentName, "荣誉类型 '" + rd.honorTypeName + "' 不存在"));
+                            continue;
+                        }
 
-                        // 荣誉成就内容不进行 AI 润色，直接保存原文
                         Long tid = rd.academicTermId != null ? rd.academicTermId : getDefaultAcademicTermId();
-                        if (rd.achievementId != null) updateAchievement(rd.achievementId, honorTypeId, rd.achievementText);
-                        else insertAchievement(tid, rd.studentId, honorTypeId, rd.achievementText);
+                        if (!Objects.equals(termId, tid)) {
+                            failed++;
+                            achievementValidationFailed = true;
+                            errors.add(createError(rd.rowNum, rd.studentName, "同一学生的荣誉学期不一致"));
+                            continue;
+                        }
+                        achievementItems.add(new ParentContentLifecycleService.AchievementImportItem(
+                                rd.achievementId, honorTypeId, rd.achievementText));
                     }
-                    if (hasComment || rows.stream().anyMatch(r -> !isEmpty(r.honorTypeName))) success++;
+                    if (termId == null) {
+                        throw new IllegalArgumentException("无法确定学期，请检查模版是否完整");
+                    }
+                    if (!achievementValidationFailed) {
+                        Long cid = first.classId;
+                        if (cid == null) cid = getClassIdForStudent(first.studentId);
+                        if (cid == null) cid = findClassIdByStudent(first.studentId);
+                        if (cid == null) throw new IllegalArgumentException("无法确定学生班级");
+                        importItems.add(new ParentContentLifecycleService.ParentContentImportItem(
+                                termId,
+                                cid,
+                                first.studentId,
+                                hasAnyCommentContent,
+                                oc,
+                                st,
+                                ip,
+                                achievementItems));
+                    }
+                    if (hasAnyCommentContent || hasAnyAchievement) success++;
                 } catch (Exception ex) { failed++; errors.add(createError(rows.get(0).rowNum, rows.get(0).studentName, ex.getMessage())); }
+            }
+            if (errors.isEmpty()) {
+                lifecycleService.importParentContentBatch(importItems);
+            } else {
+                success = 0;
             }
         } catch (IOException ex) { throw new IllegalArgumentException("无法读取 Excel 文件", ex); }
 
@@ -590,32 +628,6 @@ public class GradeExcelService extends SchoolBaseService {
             insert("school_student_course_result", "INSERT INTO school_student_course_result (academic_term_id, class_subject_id, student_id, exam_type_id, score, performance_comment, strengths, improvement_points, evaluator_user_id, evaluated_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,1)", academicTermId, classSubjectId, studentId, examTypeId, score, perf, strengths, improv, evaluatorId, now);
         else
             jdbcTemplate.update("UPDATE school_student_course_result SET score=?, performance_comment=?, strengths=?, improvement_points=?, exam_type_id=?, evaluator_user_id=?, evaluated_at=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", score, perf, strengths, improv, examTypeId, evaluatorId, now, ((Number) ex.get(0).get("id")).longValue());
-    }
-
-    private void upsertOverallComment(long academicTermId, Long classId, long studentId, String oc, String st, String ip, long evaluatorId) {
-        Timestamp now = Timestamp.valueOf(LocalDateTime.now());
-        List<Map<String, Object>> ex = jdbcTemplate.queryForList("SELECT id FROM school_student_overall_comment WHERE academic_term_id=? AND student_id=?", academicTermId, studentId);
-        Long cid = classId != null ? classId : getClassIdForStudent(studentId);
-        if (ex.isEmpty())
-            insert("school_student_overall_comment", "INSERT INTO school_student_overall_comment (academic_term_id, class_id, student_id, overall_comment, strengths, improvement_points, evaluator_user_id, evaluated_at, status) VALUES (?,?,?,?,?,?,?,?,1)", academicTermId, cid, studentId, oc, st, ip, evaluatorId, now);
-        else
-            jdbcTemplate.update("UPDATE school_student_overall_comment SET overall_comment=?, strengths=?, improvement_points=?, class_id=?, evaluator_user_id=?, evaluated_at=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", oc, st, ip, cid, evaluatorId, now, ((Number) ex.get(0).get("id")).longValue());
-    }
-
-    private void deleteExistingAchievements(long academicTermId, long studentId) {
-        jdbcTemplate.update("DELETE FROM school_student_achievement WHERE academic_term_id = ? AND student_id = ?",
-            academicTermId, studentId);
-    }
-
-    private void insertAchievement(long tid, long sid, long honorTypeId, String text) {
-        int max = 0;
-        List<Map<String, Object>> ex = jdbcTemplate.queryForList("SELECT COALESCE(MAX(sort_order),-1) AS maxSort FROM school_student_achievement WHERE academic_term_id=? AND student_id=?", tid, sid);
-        if (!ex.isEmpty() && ex.get(0).get("maxSort") != null) max = ((Number) ex.get(0).get("maxSort")).intValue();
-        insert("school_student_achievement", "INSERT INTO school_student_achievement (academic_term_id, student_id, honor_type_id, achievement_text, sort_order) VALUES (?,?,?,?,?)", tid, sid, honorTypeId, text, max + 1);
-    }
-
-    private void updateAchievement(long id, long honorTypeId, String text) {
-        jdbcTemplate.update("UPDATE school_student_achievement SET honor_type_id=?, achievement_text=? WHERE id=?", honorTypeId, text, id);
     }
 
     // ==================== POI 单元格读取 ====================

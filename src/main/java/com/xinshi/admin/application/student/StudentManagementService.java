@@ -9,6 +9,7 @@
  */
 package com.xinshi.admin.application.student;
 
+import com.xinshi.admin.application.h5.ParentContentLifecycleService;
 import com.xinshi.admin.application.school.AccessControlService;
 import com.xinshi.admin.application.school.SchoolBaseService;
 import com.xinshi.admin.interfaces.dto.PageRequest;
@@ -35,10 +36,15 @@ extends SchoolBaseService {
     private static final int STUDENT_NO_RANDOM_BOUND = 1000;
     private static final int STUDENT_NO_MAX_GENERATE_ATTEMPTS = 20;
     private final AccessControlService accessControlService;
+    private final ParentContentLifecycleService parentContentLifecycleService;
 
-    public StudentManagementService(JdbcTemplate jdbcTemplate, AccessControlService accessControlService) {
+    public StudentManagementService(
+            JdbcTemplate jdbcTemplate,
+            AccessControlService accessControlService,
+            ParentContentLifecycleService parentContentLifecycleService) {
         super(jdbcTemplate);
         this.accessControlService = accessControlService;
+        this.parentContentLifecycleService = parentContentLifecycleService;
     }
 
     public PageResult<Map<String, Object>> listStudents(Long classId, String keyword, Integer status, PageRequest pageRequest) {
@@ -177,12 +183,16 @@ extends SchoolBaseService {
         }
         sql.append(", updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_deleted = 0");
         args.add(id);
-        this.jdbcTemplate.update(sql.toString(), args.toArray());
+        int updated = this.jdbcTemplate.update(sql.toString(), args.toArray());
+        if (updated != 1) {
+            throw new IllegalStateException("学生更新失败");
+        }
 
         // Migrate scores and comments if the class has changed
         if (newClassId != null && oldClassId != null && !newClassId.equals(oldClassId)) {
             this.migrateScoresOnClassChange(id, oldClassId, newClassId);
-            this.migrateCommentsOnClassChange(id, oldClassId, newClassId);
+            this.parentContentLifecycleService.updateCommentsForStudentClassChangeInCurrentTransaction(
+                    id, oldClassId, newClassId);
         }
 
         return this.getStudent(id);
@@ -203,17 +213,6 @@ extends SchoolBaseService {
             "  AND new_cs.class_id = ? " +
             "SET r.class_subject_id = new_cs.id, r.updated_at = CURRENT_TIMESTAMP " +
             "WHERE r.student_id = ? AND old_cs.class_id = ?",
-            new Object[]{newClassId, studentId, oldClassId});
-    }
-
-    /**
-     * Update the class_id in overall comments to reflect the new class.
-     */
-    private void migrateCommentsOnClassChange(long studentId, long oldClassId, long newClassId) {
-        this.jdbcTemplate.update(
-            "UPDATE school_student_overall_comment " +
-            "SET class_id = ?, updated_at = CURRENT_TIMESTAMP " +
-            "WHERE student_id = ? AND class_id = ?",
             new Object[]{newClassId, studentId, oldClassId});
     }
 
@@ -268,4 +267,3 @@ extends SchoolBaseService {
         return last;
     }
 }
-

@@ -918,22 +918,13 @@ extends SchoolBaseService {
             this.drawColumnBorders(rowTop, rowHeight, colWidths);
             this.content.setNonStrokingColor(TEXT_COLOR);
             float honorTypeTextY = rowTop - rowHeight + (rowHeight - 9.0f) / 2.0f + 2.0f;
-            this.content.beginText();
-            this.content.setFont(this.boldFont, 9.0f);
-            String safeHonorType = this.cleanPdfText(cells[0]);
-            float honorTypeWidth = this.boldFont.getStringWidth(safeHonorType) / 1000.0f * 9.0f;
+            float honorTypeWidth = richTextWidth(cells[0], this.boldFont, 9);
             float honorTypeTextX = 50.0f + Math.max(6.0f, (colWidths[0] - honorTypeWidth) / 2.0f);
-            this.content.newLineAtOffset(honorTypeTextX, honorTypeTextY);
-            this.content.showText(safeHonorType);
-            this.content.endText();
+            renderRichText(honorTypeTextX, honorTypeTextY, cells[0], this.boldFont, 9, TEXT_COLOR);
             float detailTextY = rowTop - 8.0f - 10.0f;
             float detailTextX = 50.0f + colWidths[0] + 6.0f;
             for (String line : detailLines) {
-                this.content.beginText();
-                this.content.setFont(this.regularFont, 10.0f);
-                this.content.newLineAtOffset(detailTextX, detailTextY);
-                this.content.showText(this.cleanPdfText(line));
-                this.content.endText();
+                renderRichText(detailTextX, detailTextY, line, this.regularFont, 10, TEXT_COLOR);
                 detailTextY -= 13.0f;
             }
             this.y -= rowHeight;
@@ -958,7 +949,7 @@ extends SchoolBaseService {
                     codePoint = paragraph.codePointAt(offset);
                     String next = new String(Character.toChars(codePoint));
                     String candidate = current + next;
-                    if (current.length() > 0 && font.getStringWidth(this.cleanPdfText(candidate)) / 1000.0f * (float)fontSize > maxWidth) {
+                    if (current.length() > 0 && richTextWidth(candidate, font, fontSize) > maxWidth) {
                         lines.add(current.toString());
                         current.setLength(0);
                     }
@@ -1081,15 +1072,10 @@ extends SchoolBaseService {
             this.content.addRect(50.0f, rowTop - rowHeight, totalWidth, rowHeight);
             this.content.stroke();
             this.content.setNonStrokingColor(TEXT_COLOR);
-            this.content.beginText();
-            this.content.setFont(this.boldFont, 12.0f);
-            String safeTitle = this.cleanPdfText(title);
-            float titleWidth = this.boldFont.getStringWidth(safeTitle) / 1000.0f * 12.0f;
+            float titleWidth = richTextWidth(title, this.boldFont, 12);
             float titleX = 50.0f + (totalWidth - titleWidth) / 2.0f;
             float titleY = rowTop - rowHeight + (rowHeight - 12.0f) / 2.0f + 2.0f;
-            this.content.newLineAtOffset(titleX, titleY);
-            this.content.showText(safeTitle);
-            this.content.endText();
+            renderRichText(titleX, titleY, title, this.boldFont, 12, TEXT_COLOR);
             this.y -= rowHeight;
         }
 
@@ -1155,17 +1141,12 @@ extends SchoolBaseService {
                 this.content.setNonStrokingColor(TEXT_COLOR);
                 float textY = rowTop - 8.0f - 10.0f;
                 for (String line : (List<String>)linesByCell.get(i)) {
-                    String safeLine = this.cleanPdfText(line);
                     float textX = x + 6.0f;
                     if (header) {
-                        float textWidth = font.getStringWidth(safeLine) / 1000.0f * (float)fontSize;
+                        float textWidth = richTextWidth(line, font, fontSize);
                         textX = x + Math.max(6.0f, (widths[i] - textWidth) / 2.0f);
                     }
-                    this.content.beginText();
-                    this.content.setFont(font, (float)fontSize);
-                    this.content.newLineAtOffset(textX, textY);
-                    this.content.showText(safeLine);
-                    this.content.endText();
+                    renderRichText(textX, textY, line, font, fontSize, TEXT_COLOR);
                     textY -= 13.0f;
                 }
                 x += widths[i];
@@ -1211,61 +1192,34 @@ extends SchoolBaseService {
         }
 
         private void drawHeaderCellText(String text, float x, float rowTop, float cellWidth, float rowHeight, boolean isBold) throws IOException {
-            this.content.beginText();
-            this.content.setFont(isBold ? this.boldFont : this.regularFont, 9.0f);
-            String safe = this.cleanPdfText(text);
-            float textWidth = (isBold ? this.boldFont : this.regularFont).getStringWidth(safe) / 1000.0f * 9.0f;
+            PDFont font = isBold ? this.boldFont : this.regularFont;
+            float textWidth = richTextWidth(text, font, 9);
             float textX = x + (cellWidth - textWidth) / 2.0f;
             float textY = rowTop - rowHeight + (rowHeight - 9.0f) / 2.0f + 2.0f;
-            this.content.newLineAtOffset(Math.max(x + 2.0f, textX), textY);
-            this.content.showText(safe);
-            this.content.endText();
+            renderRichText(Math.max(x + 2.0f, textX), textY, text, font, 9, TEXT_COLOR);
         }
 
         private void drawCellText(String text, float x, float rowTop, float cellWidth, float rowHeight, PDFont font, int fontSize, boolean center) throws IOException {
-            this.content.beginText();
-            this.content.setFont(font, (float)fontSize);
-            String safe = this.cleanPdfText(text);
-            float textWidth = font.getStringWidth(safe) / 1000.0f * (float)fontSize;
+            float textWidth = richTextWidth(text, font, fontSize);
             float textX = center ? x + (cellWidth - textWidth) / 2.0f : x + 6.0f;
             float textY = rowTop - rowHeight + (rowHeight - (float)fontSize) / 2.0f + 2.0f;
-            this.content.newLineAtOffset(Math.max(x + 2.0f, textX), textY);
-            this.content.showText(safe);
-            this.content.endText();
+            renderRichText(Math.max(x + 2.0f, textX), textY, text, font, fontSize, TEXT_COLOR);
         }
 
         private void writeTextAt(float x, float yPos, String text, PDFont font, int fontSize) throws IOException {
-            this.content.beginText();
-            this.content.setFont(font, (float)fontSize);
-            this.content.newLineAtOffset(x, yPos);
-            this.content.showText(this.cleanPdfText(text));
-            this.content.endText();
+            renderRichText(x, yPos, text, font, fontSize, TEXT_COLOR);
         }
 
         private void writeCenteredText(String text, PDFont font, int fontSize, Color color, float lineHeight) throws IOException {
             this.ensureSpace(lineHeight);
-            String safe = this.cleanPdfText(text);
-            float textWidth = font.getStringWidth(safe) / 1000.0f * (float)fontSize;
-            this.content.setNonStrokingColor(color);
-            this.content.beginText();
-            this.content.setFont(font, (float)fontSize);
-            this.content.newLineAtOffset((PAGE_WIDTH - textWidth) / 2.0f, this.y);
-            this.content.showText(safe);
-            this.content.endText();
-            this.content.setNonStrokingColor(TEXT_COLOR);
+            float textWidth = richTextWidth(text, font, fontSize);
+            renderRichText((PAGE_WIDTH - textWidth) / 2.0f, this.y, text, font, fontSize, color);
             this.y -= lineHeight;
         }
 
         private void writeCenteredTextAt(float yPos, String text, PDFont font, int fontSize, Color color) throws IOException {
-            String safe = this.cleanPdfText(text);
-            float textWidth = font.getStringWidth(safe) / 1000.0f * (float)fontSize;
-            this.content.setNonStrokingColor(color);
-            this.content.beginText();
-            this.content.setFont(font, (float)fontSize);
-            this.content.newLineAtOffset((PAGE_WIDTH - textWidth) / 2.0f, yPos);
-            this.content.showText(safe);
-            this.content.endText();
-            this.content.setNonStrokingColor(TEXT_COLOR);
+            float textWidth = richTextWidth(text, font, fontSize);
+            renderRichText((PAGE_WIDTH - textWidth) / 2.0f, yPos, text, font, fontSize, color);
         }
 
         private List<String> wrapText(String text, float maxWidth, PDFont font, int fontSize) throws IOException {
@@ -1277,7 +1231,7 @@ extends SchoolBaseService {
                 codePoint = safe.codePointAt(offset);
                 String next = new String(Character.toChars(codePoint));
                 String candidate = current + next;
-                if (current.length() > 0 && font.getStringWidth(candidate) / 1000.0f * (float)fontSize > maxWidth) {
+                if (current.length() > 0 && richTextWidth(candidate, font, fontSize) > maxWidth) {
                     lines.add(current.toString());
                     current.setLength(0);
                 }
@@ -1293,18 +1247,145 @@ extends SchoolBaseService {
         }
 
         private float textWidth(String text, PDFont font, int fontSize) throws IOException {
-            return font.getStringWidth(this.cleanPdfText(text)) / 1000.0f * (float)fontSize;
+            return richTextWidth(text, font, fontSize);
+        }
+
+        // ---- Rich text: subscript / superscript via PDF textRise ----
+
+        private static class ScriptSegment {
+            final String text;
+            final float fontSizeMul;
+            final float textRise;
+
+            ScriptSegment(String text, float fontSizeMul, float textRise) {
+                this.text = text;
+                this.fontSizeMul = fontSizeMul;
+                this.textRise = textRise;
+            }
+        }
+
+        private static boolean isSuperscriptCodePoint(int cp) {
+            return (cp >= 0x00B2 && cp <= 0x00B3)
+                || cp == 0x00B9
+                || (cp >= 0x2070 && cp <= 0x207F);
+        }
+
+        private static boolean isSubscriptCodePoint(int cp) {
+            return cp >= 0x2080 && cp <= 0x209C;
+        }
+
+        private static char baseCharFromScript(int cp) {
+            if (cp == 0x00B2) return '2';
+            if (cp == 0x00B3) return '3';
+            if (cp == 0x00B9) return '1';
+            if (cp >= 0x2070 && cp <= 0x2079) return (char) ('0' + (cp - 0x2070));
+            if (cp == 0x2071) return 'i';
+            if (cp == 0x207A) return '+';
+            if (cp == 0x207B) return '-';
+            if (cp == 0x207C) return '=';
+            if (cp == 0x207D) return '(';
+            if (cp == 0x207E) return ')';
+            if (cp == 0x207F) return 'n';
+            if (cp >= 0x2080 && cp <= 0x2089) return (char) ('0' + (cp - 0x2080));
+            if (cp == 0x208A) return '+';
+            if (cp == 0x208B) return '-';
+            if (cp == 0x208C) return '=';
+            if (cp == 0x208D) return '(';
+            if (cp == 0x208E) return ')';
+            if (cp == 0x2090) return 'a';
+            if (cp == 0x2091) return 'e';
+            if (cp == 0x2092) return 'o';
+            if (cp == 0x2093) return 'x';
+            if (cp == 0x2094) return 'ə';
+            if (cp == 0x2095) return 'h';
+            if (cp == 0x2096) return 'k';
+            if (cp == 0x2097) return 'l';
+            if (cp == 0x2098) return 'm';
+            if (cp == 0x2099) return 'n';
+            if (cp == 0x209A) return 'p';
+            if (cp == 0x209B) return 's';
+            if (cp == 0x209C) return 't';
+            return '?';
+        }
+
+        private List<ScriptSegment> segmentRichText(String text, int baseFontSize) {
+            if (text == null || text.isEmpty()) {
+                return Collections.emptyList();
+            }
+            // Strip control chars that fonts cannot render (defense inherited from cleanPdfText)
+            text = text.replace('\n', ' ').replace('\r', ' ');
+            List<ScriptSegment> segments = new ArrayList<>();
+            StringBuilder current = new StringBuilder();
+            int currentMode = 0;
+            for (int offset = 0; offset < text.length(); ) {
+                int cp = text.codePointAt(offset);
+                int mode;
+                if (isSuperscriptCodePoint(cp)) {
+                    mode = 1;
+                } else if (isSubscriptCodePoint(cp)) {
+                    mode = -1;
+                } else {
+                    mode = 0;
+                }
+                if (mode != currentMode && current.length() > 0) {
+                    segments.add(makeScriptSegment(current.toString(), currentMode, baseFontSize));
+                    current.setLength(0);
+                }
+                currentMode = mode;
+                if (mode == 0) {
+                    current.appendCodePoint(cp);
+                } else {
+                    current.append(baseCharFromScript(cp));
+                }
+                offset += Character.charCount(cp);
+            }
+            if (current.length() > 0) {
+                segments.add(makeScriptSegment(current.toString(), currentMode, baseFontSize));
+            }
+            return segments;
+        }
+
+        private static ScriptSegment makeScriptSegment(String text, int mode, int baseFontSize) {
+            if (mode == 0) {
+                return new ScriptSegment(text, 1.0f, 0f);
+            }
+            float fontSizeMul = 0.65f;
+            float textRise = mode == 1 ? (float) baseFontSize * 0.42f : -(float) baseFontSize * 0.22f;
+            return new ScriptSegment(text, fontSizeMul, textRise);
+        }
+
+        private float richTextWidth(String text, PDFont font, int fontSize) throws IOException {
+            List<ScriptSegment> segs = segmentRichText(text, fontSize);
+            float total = 0;
+            for (ScriptSegment seg : segs) {
+                total += font.getStringWidth(seg.text) / 1000.0f * (float) fontSize * seg.fontSizeMul;
+            }
+            return total;
+        }
+
+        private float renderRichText(float x, float y, String text, PDFont font, int fontSize, Color color) throws IOException {
+            List<ScriptSegment> segs = segmentRichText(text, fontSize);
+            float curX = x;
+            for (ScriptSegment seg : segs) {
+                float segFontSize = (float) fontSize * seg.fontSizeMul;
+                this.content.setNonStrokingColor(color);
+                this.content.beginText();
+                this.content.setFont(font, segFontSize);
+                this.content.setTextRise(seg.textRise);
+                this.content.newLineAtOffset(curX, y);
+                this.content.showText(seg.text);
+                this.content.endText();
+                curX += font.getStringWidth(seg.text) / 1000.0f * segFontSize;
+            }
+            this.content.setNonStrokingColor(TEXT_COLOR);
+            return curX - x;
         }
 
         private String cleanPdfText(String text) {
             if (text == null) {
                 return "";
             }
-            // NFKC normalization converts compatibility characters to canonical equivalents:
-            // e.g. subscript ₁ (U+2081) → 1, superscript ⁿ (U+207F) → n, fullwidth A (U+FF21) → A
-            // This prevents "No glyph for U+XXXX" errors when fonts lack these glyphs.
-            String cleaned = java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFKC);
-            return cleaned.replace('\n', ' ').replace('\r', ' ');
+            return text.replace('\n', ' ').replace('\r', ' ');
         }
 
         private void ensureSpace(float lineHeight) throws IOException {
@@ -1347,7 +1428,7 @@ extends SchoolBaseService {
             }
             int fontSize = 17;
             String safeName = this.cleanPdfText(this.schoolNameZh);
-            float textWidth = this.headerFont.getStringWidth(safeName) / 1000.0f * (float)fontSize;
+            float textWidth = richTextWidth(this.schoolNameZh, this.headerFont, fontSize);
             float logoSize = this.logoImage == null ? 0.0f : 24.0f;
             float gap = this.logoImage == null ? 0.0f : 8.0f;
             float totalWidth = logoSize + gap + textWidth;

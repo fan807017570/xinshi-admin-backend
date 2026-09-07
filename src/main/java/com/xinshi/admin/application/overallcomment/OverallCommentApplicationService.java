@@ -6,6 +6,7 @@
  */
 package com.xinshi.admin.application.overallcomment;
 
+import com.xinshi.admin.application.h5.ParentContentLifecycleService;
 import com.xinshi.admin.domain.overallcomment.OverallComment;
 import com.xinshi.admin.domain.overallcomment.OverallCommentRepository;
 import com.xinshi.admin.domain.shared.AuthSession;
@@ -18,11 +19,17 @@ public class OverallCommentApplicationService {
     private final OverallCommentRepository overallCommentRepository;
     private final AuthorizationService authorizationService;
     private final AuthSession authSession;
+    private final ParentContentLifecycleService lifecycleService;
 
-    public OverallCommentApplicationService(OverallCommentRepository overallCommentRepository, AuthorizationService authorizationService, AuthSession authSession) {
+    public OverallCommentApplicationService(
+            OverallCommentRepository overallCommentRepository,
+            AuthorizationService authorizationService,
+            AuthSession authSession,
+            ParentContentLifecycleService lifecycleService) {
         this.overallCommentRepository = overallCommentRepository;
         this.authorizationService = authorizationService;
         this.authSession = authSession;
+        this.lifecycleService = lifecycleService;
     }
 
     public List<OverallComment> listOverallComments(Long academicTermId, Long classId, Long studentId) {
@@ -34,10 +41,19 @@ public class OverallCommentApplicationService {
         this.authorizationService.ensureHeadTeacherOrAdmin();
         this.authorizationService.ensureCanAccessClass(classId);
         this.authorizationService.ensureStudentBelongsToClass(studentId, classId);
-        return this.overallCommentRepository.findByTermAndStudent(academicTermId, studentId).map(existing -> {
-            this.overallCommentRepository.update(OverallComment.record(academicTermId, classId, studentId, overallComment, strengths, improvementPoints, evaluatorUserId, status));
-            return this.overallCommentRepository.findByTermAndStudent(academicTermId, studentId).orElseThrow(() -> new IllegalStateException("更新评语后未找到记录"));
-        }).orElseGet(() -> this.overallCommentRepository.save(OverallComment.record(academicTermId, classId, studentId, overallComment, strengths, improvementPoints, evaluatorUserId, status)));
+        java.util.Map<String, Object> saved = this.lifecycleService.saveCommentDraft(
+                academicTermId,
+                classId,
+                studentId,
+                overallComment,
+                strengths,
+                improvementPoints);
+        Object idValue = saved.get("id");
+        if (!(idValue instanceof Number)) {
+            throw new IllegalStateException("保存评语后未返回记录编号");
+        }
+        return this.overallCommentRepository.findById(((Number)idValue).longValue())
+                .orElseThrow(() -> new IllegalStateException("保存评语后未找到记录"));
     }
 
     public OverallComment getOverallComment(long id) {
@@ -46,4 +62,3 @@ public class OverallCommentApplicationService {
         return comment;
     }
 }
-

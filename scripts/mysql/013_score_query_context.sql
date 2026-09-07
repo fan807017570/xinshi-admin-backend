@@ -1,0 +1,33 @@
+SET NAMES utf8mb4;
+
+CREATE TABLE school_score_query_context (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    appid VARCHAR(64) NOT NULL,
+    openid_hmac CHAR(64) NOT NULL,
+    msg_id_hash CHAR(64) NOT NULL,
+    intent VARCHAR(32) NOT NULL,
+    missing_slot_codes VARCHAR(128) DEFAULT NULL,
+    student_name_ciphertext VARBINARY(1024) DEFAULT NULL,
+    student_name_hmac CHAR(64) DEFAULT NULL,
+    year_value SMALLINT DEFAULT NULL,
+    year_mode VARCHAR(24) DEFAULT NULL,
+    academic_year VARCHAR(16) DEFAULT NULL,
+    term_no TINYINT DEFAULT NULL,
+    exam_type_code VARCHAR(32) DEFAULT NULL,
+    subject_name VARCHAR(64) DEFAULT NULL,
+    slots_ciphertext VARBINARY(4096) DEFAULT NULL,
+    wechat_account_id BIGINT UNSIGNED DEFAULT NULL,
+    resolved_student_id BIGINT UNSIGNED DEFAULT NULL,
+    resolved_academic_term_id BIGINT UNSIGNED DEFAULT NULL,
+    resolved_exam_type_id BIGINT UNSIGNED DEFAULT NULL,
+    status VARCHAR(16) NOT NULL,
+    expires_at DATETIME NOT NULL,
+    consumed_at DATETIME DEFAULT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_score_query_context_msg (msg_id_hash),
+    KEY idx_score_context_identity (appid, openid_hmac, status, expires_at, created_at),
+    KEY idx_score_context_wechat (wechat_account_id),
+    KEY idx_score_context_expires (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

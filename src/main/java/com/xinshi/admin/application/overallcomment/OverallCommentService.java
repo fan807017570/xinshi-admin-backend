@@ -7,10 +7,9 @@
  */
 package com.xinshi.admin.application.overallcomment;
 
+import com.xinshi.admin.application.h5.ParentContentLifecycleService;
 import com.xinshi.admin.application.school.AccessControlService;
 import com.xinshi.admin.application.school.SchoolBaseService;
-import java.sql.Timestamp;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -21,10 +20,15 @@ import org.springframework.stereotype.Service;
 public class OverallCommentService
 extends SchoolBaseService {
     private final AccessControlService accessControlService;
+    private final ParentContentLifecycleService lifecycleService;
 
-    public OverallCommentService(JdbcTemplate jdbcTemplate, AccessControlService accessControlService) {
+    public OverallCommentService(
+            JdbcTemplate jdbcTemplate,
+            AccessControlService accessControlService,
+            ParentContentLifecycleService lifecycleService) {
         super(jdbcTemplate);
         this.accessControlService = accessControlService;
+        this.lifecycleService = lifecycleService;
     }
 
     public List<Map<String, Object>> listOverallComments(Long academicTermId, Long classId, Long studentId) {
@@ -59,22 +63,16 @@ extends SchoolBaseService {
         long academicTermId = this.requiredLong(request, "academicTermId");
         long classId = this.requiredLong(request, "classId");
         long studentId = this.requiredLong(request, "studentId");
-        String overallComment = this.requiredString(request, "overallComment");
+        String overallComment = this.optionalString(request, "overallComment", null);
         String strengths = this.optionalString(request, "strengths", null);
         String improvementPoints = this.optionalString(request, "improvementPoints", null);
-        long evaluatorUserId = this.requiredLong(request, "evaluatorUserId");
-        int status = this.optionalInteger(request, "status", 1);
-        this.accessControlService.ensureHeadTeacherOrAdmin();
-        this.accessControlService.ensureCanAccessClass(classId);
-        this.accessControlService.ensureStudentBelongsToClass(studentId, classId);
-        List exist = this.jdbcTemplate.queryForList("SELECT id FROM school_student_overall_comment WHERE academic_term_id = ? AND student_id = ?", new Object[]{academicTermId, studentId});
-        Timestamp now = Timestamp.valueOf(LocalDateTime.now());
-        if (exist.isEmpty()) {
-            this.insert("school_student_overall_comment", "INSERT INTO school_student_overall_comment (academic_term_id, class_id, student_id, overall_comment, strengths, improvement_points, evaluator_user_id, evaluated_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", academicTermId, classId, studentId, overallComment, strengths, improvementPoints, evaluatorUserId, now, status);
-        } else {
-            this.jdbcTemplate.update("UPDATE school_student_overall_comment SET class_id = ?, overall_comment = ?, strengths = ?, improvement_points = ?, evaluator_user_id = ?, evaluated_at = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE academic_term_id = ? AND student_id = ?", new Object[]{classId, overallComment, strengths, improvementPoints, evaluatorUserId, now, status, academicTermId, studentId});
-        }
-        return this.first(this.jdbcTemplate.queryForList("SELECT o.id, o.academic_term_id AS academicTermId, o.class_id AS classId, o.student_id AS studentId, o.overall_comment AS overallComment, o.strengths, o.improvement_points AS improvementPoints, o.evaluator_user_id AS evaluatorUserId, o.evaluated_at AS evaluatedAt, o.status, o.created_at AS createdAt FROM school_student_overall_comment o WHERE o.academic_term_id = ? AND o.student_id = ?", new Object[]{academicTermId, studentId}));
+        return this.lifecycleService.saveCommentDraft(
+                academicTermId,
+                classId,
+                studentId,
+                overallComment,
+                strengths,
+                improvementPoints);
     }
 
     public Map<String, Object> getOverallComment(long id) {
@@ -83,4 +81,3 @@ extends SchoolBaseService {
         return comment;
     }
 }
-

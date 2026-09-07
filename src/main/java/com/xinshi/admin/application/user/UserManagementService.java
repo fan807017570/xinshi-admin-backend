@@ -289,14 +289,14 @@ extends SchoolBaseService {
             return menus;
         }
         if (roleCodes.contains("SUPER_ADMIN")) {
-            Collections.addAll(menus, "config", "users", "classes", "students", "scores", "transcripts", "parents");
+            Collections.addAll(menus, "config", "users", "classes", "students", "scores", "classStats", "transcripts", "parents");
             return menus;
         }
         if (roleCodes.contains("HEAD_TEACHER")) {
-            Collections.addAll(menus, "classes", "students", "scores", "transcripts", "parents");
+            Collections.addAll(menus, "classes", "students", "scores", "classStats", "transcripts", "parents");
         }
         if (roleCodes.contains("TEACHER")) {
-            Collections.addAll(menus, "scores");
+            Collections.addAll(menus, "scores", "classStats");
         }
         if (roleCodes.contains("PARENT")) {
             Collections.addAll(menus, "parents", "transcripts");
