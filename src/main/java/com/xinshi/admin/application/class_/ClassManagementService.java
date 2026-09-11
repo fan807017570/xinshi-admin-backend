@@ -15,9 +15,12 @@ import com.xinshi.admin.interfaces.dto.PageResult;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -67,6 +70,78 @@ extends SchoolBaseService {
         args.add(pageRequest.offset());
         List items = this.jdbcTemplate.queryForList(dataSql.toString(), args.toArray());
         return new PageResult<Map<String, Object>>(items, total, pageRequest.page(), pageRequest.size());
+    }
+
+    public Map<String, Object> listClassFilterOptions(String mode) {
+        StringBuilder where = new StringBuilder(" WHERE c.is_deleted = 0 AND c.status = 1");
+        ArrayList<Object> args = new ArrayList<Object>();
+        this.appendClassAccessScope(where, args, mode);
+        List<Map<String, Object>> rows = this.jdbcTemplate.queryForList(
+                "SELECT DISTINCT c.grade_session AS gradeSession, c.grade_level AS gradeLevel, eg.grade_name AS gradeName "
+                        + "FROM school_class c "
+                        + "JOIN school_enroll_grade eg ON eg.grade_level = c.grade_level AND eg.status = 1" + where
+                        + " ORDER BY c.grade_session DESC, c.grade_level ASC",
+                args.toArray());
+        Set<String> gradeSessions = new LinkedHashSet<String>();
+        Set<Integer> gradeLevels = new LinkedHashSet<Integer>();
+        Map<Integer, String> gradeNames = new LinkedHashMap<Integer, String>();
+        List<Map<String, Object>> combinations = new ArrayList<Map<String, Object>>();
+        for (Map<String, Object> row : rows) {
+            String session = this.optionalString(row, "gradeSession", null);
+            Integer level = this.optionalInteger(row, "gradeLevel", null);
+            String gradeName = this.optionalString(row, "gradeName", null);
+            if (session == null || level == null || gradeName == null) {
+                continue;
+            }
+            gradeSessions.add(session);
+            gradeLevels.add(level);
+            gradeNames.put(level, gradeName);
+            Map<String, Object> combination = new LinkedHashMap<String, Object>();
+            combination.put("gradeSession", session);
+            combination.put("gradeLevel", level);
+            combination.put("gradeName", gradeName);
+            combinations.add(combination);
+        }
+        List<Map<String, Object>> gradeOptions = new ArrayList<Map<String, Object>>();
+        for (Integer level : gradeLevels) {
+            Map<String, Object> option = new LinkedHashMap<String, Object>();
+            option.put("gradeLevel", level);
+            option.put("gradeName", gradeNames.get(level));
+            gradeOptions.add(option);
+        }
+        Map<String, Object> result = new LinkedHashMap<String, Object>();
+        result.put("gradeSessions", new ArrayList<String>(gradeSessions));
+        result.put("gradeLevels", new ArrayList<Integer>(gradeLevels));
+        result.put("gradeOptions", gradeOptions);
+        result.put("combinations", combinations);
+        return result;
+    }
+
+    private void appendClassAccessScope(StringBuilder where, List<Object> args, String mode) {
+        boolean admin = this.accessControlService.hasRole("SUPER_ADMIN");
+        boolean headTeacher = this.accessControlService.hasRole("HEAD_TEACHER");
+        boolean teacher = this.accessControlService.hasRole("TEACHER");
+        if (admin) {
+            return;
+        }
+        if (headTeacher && teacher) {
+            if ("teacher".equals(mode)) {
+                where.append(" AND EXISTS (SELECT 1 FROM school_class_subject cs WHERE cs.class_id = c.id AND cs.teacher_user_id = ? AND cs.status = 1)");
+            } else {
+                where.append(" AND c.head_teacher_user_id = ?");
+            }
+            args.add(this.accessControlService.currentUserId());
+            return;
+        }
+        if (headTeacher) {
+            where.append(" AND c.head_teacher_user_id = ?");
+            args.add(this.accessControlService.currentUserId());
+            return;
+        }
+        if (teacher) {
+            where.append(" AND EXISTS (SELECT 1 FROM school_class_subject cs WHERE cs.class_id = c.id AND cs.teacher_user_id = ? AND cs.status = 1)");
+            args.add(this.accessControlService.currentUserId());
+        }
     }
 
     public Map<String, Object> getClass(long id) {
@@ -222,10 +297,26 @@ extends SchoolBaseService {
         this.jdbcTemplate.update("UPDATE school_class SET status = 0, is_deleted = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", new Object[]{id});
     }
 
-    public List<Map<String, Object>> listClassSubjects(long academicTermId, long classId) {
-        this.accessControlService.ensureCanAccessClass(classId);
-        this.ensureClassSubjects(academicTermId, classId);
-        return this.jdbcTemplate.queryForList("SELECT cs.id, cs.academic_term_id AS academicTermId, cs.class_id AS classId, c.class_name AS className, cs.subject_id AS subjectId, s.subject_name AS subjectName, cs.source_grade_subject_id AS sourceGradeSubjectId, s.min_score AS minScore, s.max_score AS maxScore, cs.teacher_user_id AS teacherUserId, u.real_name AS teacherName, cs.status, cs.created_at AS createdAt FROM school_class_subject cs LEFT JOIN school_class c ON c.id = cs.class_id LEFT JOIN school_subject s ON s.id = cs.subject_id LEFT JOIN sys_user u ON u.id = cs.teacher_user_id WHERE cs.academic_term_id = ? AND cs.class_id = ? ORDER BY cs.id", new Object[]{academicTermId, classId});
+    public List<Map<String, Object>> listClassSubjects(long academicTermId, long classId, String mode) {
+        boolean teacherScope = this.accessControlService.hasRole("TEACHER")
+                && !this.accessControlService.hasRole("SUPER_ADMIN")
+                && (!this.accessControlService.hasRole("HEAD_TEACHER") || "teacher".equals(mode));
+        if (teacherScope) {
+            this.accessControlService.ensureCanAccessClass(classId);
+        } else {
+            this.accessControlService.ensureCanManageHeadTeacherClass(classId);
+            this.ensureClassSubjects(academicTermId, classId);
+        }
+        StringBuilder sql = new StringBuilder("SELECT cs.id, cs.academic_term_id AS academicTermId, cs.class_id AS classId, c.class_name AS className, cs.subject_id AS subjectId, s.subject_name AS subjectName, cs.source_grade_subject_id AS sourceGradeSubjectId, s.min_score AS minScore, s.max_score AS maxScore, cs.teacher_user_id AS teacherUserId, u.real_name AS teacherName, cs.status, cs.created_at AS createdAt FROM school_class_subject cs LEFT JOIN school_class c ON c.id = cs.class_id LEFT JOIN school_subject s ON s.id = cs.subject_id LEFT JOIN sys_user u ON u.id = cs.teacher_user_id WHERE cs.academic_term_id = ? AND cs.class_id = ? AND cs.status = 1");
+        List<Object> args = new ArrayList<Object>();
+        args.add(academicTermId);
+        args.add(classId);
+        if (teacherScope) {
+            sql.append(" AND cs.teacher_user_id = ?");
+            args.add(this.accessControlService.currentUserId());
+        }
+        sql.append(" ORDER BY cs.id");
+        return this.jdbcTemplate.queryForList(sql.toString(), args.toArray());
     }
 
     private void ensureClassSubjects(long academicTermId, long classId) {
@@ -374,4 +465,3 @@ extends SchoolBaseService {
         return className.substring(leftParen + 1, rightParen);
     }
 }
-

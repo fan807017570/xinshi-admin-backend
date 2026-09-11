@@ -28,6 +28,7 @@ import com.xinshi.admin.application.class_.ClassManagementService;
 import com.xinshi.admin.application.commentpolish.CommentPolishService;
 import com.xinshi.admin.application.courseresult.CourseResultService;
 import com.xinshi.admin.application.courseresult.GradeExcelService;
+import com.xinshi.admin.application.courseresult.GradeImportWorkflowService;
 import com.xinshi.admin.application.school.AccessControlService;
 import com.xinshi.admin.application.examtype.ExamTypeService;
 import com.xinshi.admin.application.honortype.HonorTypeService;
@@ -82,9 +83,10 @@ public class SchoolAdminController {
     private final ExamTypeService examTypeService;
     private final CommentPolishService commentPolishService;
     private final GradeExcelService gradeExcelService;
+    private final GradeImportWorkflowService gradeImportWorkflowService;
     private final AccessControlService accessControlService;
 
-    public SchoolAdminController(UserManagementService userManagementService, AcademicTermService academicTermService, ClassManagementService classManagementService, SubjectManagementService subjectManagementService, StudentManagementService studentManagementService, CourseResultService courseResultService, OverallCommentService overallCommentService, TranscriptService transcriptService, AchievementService achievementService, HonorTypeService honorTypeService, ExamTypeService examTypeService, CommentPolishService commentPolishService, GradeExcelService gradeExcelService, AccessControlService accessControlService) {
+    public SchoolAdminController(UserManagementService userManagementService, AcademicTermService academicTermService, ClassManagementService classManagementService, SubjectManagementService subjectManagementService, StudentManagementService studentManagementService, CourseResultService courseResultService, OverallCommentService overallCommentService, TranscriptService transcriptService, AchievementService achievementService, HonorTypeService honorTypeService, ExamTypeService examTypeService, CommentPolishService commentPolishService, GradeExcelService gradeExcelService, GradeImportWorkflowService gradeImportWorkflowService, AccessControlService accessControlService) {
         this.userManagementService = userManagementService;
         this.academicTermService = academicTermService;
         this.classManagementService = classManagementService;
@@ -98,6 +100,7 @@ public class SchoolAdminController {
         this.examTypeService = examTypeService;
         this.commentPolishService = commentPolishService;
         this.gradeExcelService = gradeExcelService;
+        this.gradeImportWorkflowService = gradeImportWorkflowService;
         this.accessControlService = accessControlService;
     }
 
@@ -171,6 +174,11 @@ public class SchoolAdminController {
         return this.classManagementService.listClasses(gradeSession, gradeLevel, mode, new PageRequest(page, size));
     }
 
+    @GetMapping(value={"/classes/filter-options"})
+    public Map<String, Object> listClassFilterOptions(@RequestParam(required=false) String mode) {
+        return this.classManagementService.listClassFilterOptions(mode);
+    }
+
     @GetMapping(value={"/classes/{id}"})
     public Map<String, Object> getClassDetail(@PathVariable long id) {
         return this.classManagementService.getClass(id);
@@ -237,8 +245,8 @@ public class SchoolAdminController {
     }
 
     @GetMapping(value={"/class-subjects"})
-    public List<Map<String, Object>> listClassSubjects(@RequestParam long academicTermId, @RequestParam long classId) {
-        return this.classManagementService.listClassSubjects(academicTermId, classId);
+    public List<Map<String, Object>> listClassSubjects(@RequestParam long academicTermId, @RequestParam long classId, @RequestParam(required=false) String mode) {
+        return this.classManagementService.listClassSubjects(academicTermId, classId, mode);
     }
 
     @PutMapping(value={"/class-subjects/{id}/teacher"})
@@ -457,12 +465,34 @@ public class SchoolAdminController {
 
     @GetMapping(value={"/course-results/export-template"})
     public ResponseEntity<Resource> exportCourseResultTemplate(
-            @RequestParam long academicTermId,
-            @RequestParam long classId,
-            @RequestParam long subjectId,
+            @RequestParam(required = false) Long academicTermId,
+            @RequestParam(required = false) String gradeSession,
+            @RequestParam(required = false) Integer gradeLevel,
+            @RequestParam(required = false) Long classId,
+            @RequestParam(required = false) Long subjectId,
             @RequestParam(required = false) Long examTypeId) throws IOException {
-        Path path = this.gradeExcelService.exportCourseResultTemplate(academicTermId, classId, subjectId, examTypeId);
+        Path path = this.gradeExcelService.exportCourseResultTemplate(
+                academicTermId, gradeSession, gradeLevel, classId, subjectId, examTypeId);
         return excelDownloadResponse(path);
+    }
+
+    @PostMapping(value={"/course-results/import/precheck"})
+    public Map<String, Object> precheckCourseResults(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(required = false) Long academicTermId,
+            @RequestParam(required = false) String gradeSession,
+            @RequestParam(required = false) Integer gradeLevel,
+            @RequestParam(required = false) Long classId,
+            @RequestParam(required = false) Long subjectId,
+            @RequestParam(required = false) Long examTypeId) {
+        return this.gradeImportWorkflowService.precheckCourseResults(
+                file, academicTermId, gradeSession, gradeLevel, classId, subjectId, examTypeId);
+    }
+
+    @PostMapping(value={"/course-results/import/commit"})
+    public Map<String, Object> commitCourseResults(@RequestBody Map<String, Object> request) {
+        return this.gradeImportWorkflowService.commitCourseResults(
+                String.valueOf(request.getOrDefault("importToken", "")));
     }
 
     @PostMapping(value={"/course-results/import"})
@@ -475,10 +505,31 @@ public class SchoolAdminController {
 
     @GetMapping(value={"/head-teacher/export-template"})
     public ResponseEntity<Resource> exportHeadTeacherTemplate(
-            @RequestParam long academicTermId,
-            @RequestParam long classId) throws IOException {
-        Path path = this.gradeExcelService.exportHeadTeacherTemplate(academicTermId, classId);
+            @RequestParam(required = false) Long academicTermId,
+            @RequestParam(required = false) String gradeSession,
+            @RequestParam(required = false) Integer gradeLevel,
+            @RequestParam(required = false) Long classId) throws IOException {
+        Path path = this.gradeExcelService.exportHeadTeacherTemplate(
+                academicTermId, gradeSession, gradeLevel, classId);
         return excelDownloadResponse(path);
+    }
+
+    @PostMapping(value={"/head-teacher/import/precheck"})
+    public Map<String, Object> precheckHeadTeacherData(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(required = false) Long academicTermId,
+            @RequestParam(required = false) String gradeSession,
+            @RequestParam(required = false) Integer gradeLevel,
+            @RequestParam(required = false) Long classId,
+            @RequestParam(defaultValue = "false") boolean enableAiPolish) {
+        return this.gradeImportWorkflowService.precheckParentContent(
+                file, academicTermId, gradeSession, gradeLevel, classId, enableAiPolish);
+    }
+
+    @PostMapping(value={"/head-teacher/import/commit"})
+    public Map<String, Object> commitHeadTeacherData(@RequestBody Map<String, Object> request) {
+        return this.gradeImportWorkflowService.commitParentContent(
+                String.valueOf(request.getOrDefault("importToken", "")));
     }
 
     @PostMapping(value={"/head-teacher/import"})
@@ -505,4 +556,3 @@ public class SchoolAdminController {
             .body(resource);
     }
 }
-

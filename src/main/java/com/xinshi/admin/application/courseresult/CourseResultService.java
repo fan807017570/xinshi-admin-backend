@@ -77,9 +77,15 @@ extends SchoolBaseService {
 
     public PageResult<Map<String, Object>> listTeacherScoreEntries(Long academicTermId, Long classId, Long subjectId, Long examTypeId, String keyword, String mode, PageRequest pageRequest) {
         this.accessControlService.ensureTeacherCanWriteResults();
-        String fromClause = "FROM school_class_subject cs LEFT JOIN school_academic_term t ON t.id = cs.academic_term_id LEFT JOIN school_class c ON c.id = cs.class_id LEFT JOIN school_student s ON s.class_id = cs.class_id AND s.is_deleted = 0 AND s.status = 1 LEFT JOIN school_subject su ON su.id = cs.subject_id LEFT JOIN school_student_course_result r ON r.academic_term_id = cs.academic_term_id AND r.class_subject_id = cs.id AND r.student_id = s.id LEFT JOIN sys_user tu ON tu.id = cs.teacher_user_id LEFT JOIN sys_user u ON u.id = r.evaluator_user_id LEFT JOIN school_exam_type et ON et.id = r.exam_type_id";
-        StringBuilder where = new StringBuilder(" WHERE cs.status = 1 AND c.is_deleted = 0 AND s.id IS NOT NULL");
+        StringBuilder fromClause = new StringBuilder("FROM school_class_subject cs LEFT JOIN school_academic_term t ON t.id = cs.academic_term_id LEFT JOIN school_class c ON c.id = cs.class_id LEFT JOIN school_student s ON s.class_id = cs.class_id AND s.is_deleted = 0 AND s.status = 1 LEFT JOIN school_subject su ON su.id = cs.subject_id LEFT JOIN school_student_course_result r ON r.academic_term_id = cs.academic_term_id AND r.class_subject_id = cs.id AND r.student_id = s.id");
         ArrayList<Object> args = new ArrayList<Object>();
+        if (examTypeId != null) {
+            // 考试类型必须放在 LEFT JOIN 条件中，否则尚未录入成绩的学生会被 WHERE 条件过滤。
+            fromClause.append(" AND r.exam_type_id = ?");
+            args.add(examTypeId);
+        }
+        fromClause.append(" LEFT JOIN sys_user tu ON tu.id = cs.teacher_user_id LEFT JOIN sys_user u ON u.id = r.evaluator_user_id LEFT JOIN school_exam_type et ON et.id = r.exam_type_id");
+        StringBuilder where = new StringBuilder(" WHERE cs.status = 1 AND t.status = 1 AND c.status = 1 AND c.is_deleted = 0 AND su.status = 1 AND s.id IS NOT NULL");
         Long currentUserId = this.accessControlService.currentUserId();
         if (academicTermId != null) {
             where.append(" AND cs.academic_term_id = ?");
@@ -92,10 +98,6 @@ extends SchoolBaseService {
         if (subjectId != null) {
             where.append(" AND cs.subject_id = ?");
             args.add(subjectId);
-        }
-        if (examTypeId != null) {
-            where.append(" AND r.exam_type_id = ?");
-            args.add(examTypeId);
         }
         if (StringUtils.hasText((String)keyword)) {
             where.append(" AND (s.student_name LIKE ? OR s.student_no LIKE ?)");
@@ -142,15 +144,20 @@ extends SchoolBaseService {
         String performanceComment = this.optionalString(request, "performanceComment", null);
         String strengths = this.optionalString(request, "strengths", null);
         String improvementPoints = this.optionalString(request, "improvementPoints", null);
-        Long evalUserId = this.optionalLong(request, "evaluatorUserId");
-        long evaluatorUserId = evalUserId != null ? evalUserId : this.accessControlService.currentUserId();
+        long evaluatorUserId = this.accessControlService.currentUserId();
         int status = this.optionalInteger(request, "status", 1);
         long classSubjectId = requestedClassSubjectId == null ? this.ensureClassSubjectForResult(request, academicTermId) : requestedClassSubjectId.longValue();
         this.accessControlService.ensureCanAccessClassSubject(classSubjectId);
         if (examTypeId != null && (examTypeRows = this.jdbcTemplate.queryForList("SELECT id FROM school_exam_type WHERE id = ? AND status = 1", new Object[]{examTypeId})).isEmpty()) {
             throw new IllegalArgumentException("考试类型不存在或已停用");
         }
-        List classSubjectRows = this.jdbcTemplate.queryForList("SELECT cs.class_id AS classId, s.min_score AS minScore, s.max_score AS maxScore FROM school_class_subject cs LEFT JOIN school_subject s ON s.id = cs.subject_id WHERE cs.id = ? AND cs.academic_term_id = ?", new Object[]{classSubjectId, academicTermId});
+        List classSubjectRows = this.jdbcTemplate.queryForList(
+                "SELECT cs.class_id AS classId, s.min_score AS minScore, s.max_score AS maxScore "
+                        + "FROM school_class_subject cs JOIN school_subject s ON s.id = cs.subject_id "
+                        + "JOIN school_class c ON c.id = cs.class_id "
+                        + "WHERE cs.id = ? AND cs.academic_term_id = ? AND cs.status = 1 "
+                        + "AND s.status = 1 AND c.status = 1 AND c.is_deleted = 0",
+                new Object[]{classSubjectId, academicTermId});
         if (classSubjectRows.isEmpty()) {
             throw new IllegalArgumentException("班级课程不存在");
         }
@@ -159,17 +166,11 @@ extends SchoolBaseService {
         this.accessControlService.ensureScoreInSubjectRange(score, classSubject);
         Timestamp now = Timestamp.valueOf(LocalDateTime.now());
         List exactMatch = this.jdbcTemplate.queryForList("SELECT id FROM school_student_course_result WHERE academic_term_id = ? AND class_subject_id = ? AND student_id = ? AND (exam_type_id = ? OR (exam_type_id IS NULL AND ? IS NULL))", new Object[]{academicTermId, classSubjectId, studentId, examTypeId, examTypeId});
+        if (exactMatch.size() > 1) {
+            throw new IllegalStateException("目标成绩存在重复数据，请先完成数据治理");
+        }
         if (exactMatch.isEmpty()) {
-            List sameCombo = this.jdbcTemplate.queryForList("SELECT id FROM school_student_course_result WHERE academic_term_id = ? AND class_subject_id = ? AND student_id = ?", new Object[]{academicTermId, classSubjectId, studentId});
-            if (sameCombo.isEmpty()) {
-                this.insert("school_student_course_result", "INSERT INTO school_student_course_result (academic_term_id, class_subject_id, student_id, exam_type_id, score, performance_comment, strengths, improvement_points, evaluator_user_id, evaluated_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", academicTermId, classSubjectId, studentId, examTypeId, score, performanceComment, strengths, improvementPoints, evaluatorUserId, now, status);
-            } else {
-                for (int i = 1; i < sameCombo.size(); ++i) {
-                    this.jdbcTemplate.update("DELETE FROM school_student_course_result WHERE id = ?", new Object[]{this.requiredLong((Map)sameCombo.get(i), "id")});
-                }
-                Long existingId = this.requiredLong((Map)sameCombo.get(0), "id");
-                this.jdbcTemplate.update("UPDATE school_student_course_result SET score = ?, performance_comment = ?, strengths = ?, improvement_points = ?, exam_type_id = ?, evaluator_user_id = ?, evaluated_at = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", new Object[]{score, performanceComment, strengths, improvementPoints, examTypeId, evaluatorUserId, now, status, existingId});
-            }
+            this.insert("school_student_course_result", "INSERT INTO school_student_course_result (academic_term_id, class_subject_id, student_id, exam_type_id, score, performance_comment, strengths, improvement_points, evaluator_user_id, evaluated_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", academicTermId, classSubjectId, studentId, examTypeId, score, performanceComment, strengths, improvementPoints, evaluatorUserId, now, status);
         } else {
             Long existingId = this.requiredLong((Map)exactMatch.get(0), "id");
             this.jdbcTemplate.update("UPDATE school_student_course_result SET score = ?, performance_comment = ?, strengths = ?, improvement_points = ?, exam_type_id = ?, evaluator_user_id = ?, evaluated_at = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", new Object[]{score, performanceComment, strengths, improvementPoints, examTypeId, evaluatorUserId, now, status, existingId});
@@ -184,15 +185,14 @@ extends SchoolBaseService {
         long classId = this.requiredLong(request, "classId");
         long subjectId = this.requiredLong(request, "subjectId");
         this.accessControlService.ensureCanAccessClass(classId);
-        List existing = this.jdbcTemplate.queryForList("SELECT id FROM school_class_subject WHERE academic_term_id = ? AND class_id = ? AND subject_id = ?", new Object[]{academicTermId, classId, subjectId});
+        List existing = this.jdbcTemplate.queryForList(
+                "SELECT id FROM school_class_subject WHERE academic_term_id = ? "
+                        + "AND class_id = ? AND subject_id = ? AND status = 1",
+                new Object[]{academicTermId, classId, subjectId});
         if (!existing.isEmpty()) {
             return this.requiredLong((Map)existing.get(0), "id");
         }
-        List subjects = this.jdbcTemplate.queryForList("SELECT id FROM school_subject WHERE id = ? AND status = 1", new Object[]{subjectId});
-        if (subjects.isEmpty()) {
-            throw new IllegalArgumentException("科目不存在或已停用");
-        }
-        return this.insert("school_class_subject", "INSERT INTO school_class_subject (academic_term_id, class_id, subject_id, status) VALUES (?, ?, ?, 1)", academicTermId, classId, subjectId);
+        throw new IllegalArgumentException("所选班级未配置该科目");
     }
 
     public Map<String, Object> publishStudentResult(long id) {
@@ -209,7 +209,12 @@ extends SchoolBaseService {
     }
 
     public void deleteStudentResult(long id) {
-        this.jdbcTemplate.update("DELETE FROM school_student_course_result WHERE id = ?", new Object[]{id});
+        this.accessControlService.ensureTeacherCanWriteResults();
+        this.accessControlService.ensureCanAccessResult(id);
+        int deleted = this.jdbcTemplate.update(
+                "DELETE FROM school_student_course_result WHERE id = ?", new Object[]{id});
+        if (deleted != 1) {
+            throw new IllegalArgumentException("成绩不存在");
+        }
     }
 }
-

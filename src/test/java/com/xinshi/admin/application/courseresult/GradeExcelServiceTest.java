@@ -1,6 +1,7 @@
 package com.xinshi.admin.application.courseresult;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -21,6 +22,35 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 
 class GradeExcelServiceTest {
+
+    @Test
+    void courseTemplateExportRejectsEveryMissingContextParameter() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        GradeExcelService service = new GradeExcelService(
+                jdbcTemplate,
+                mock(CommentPolishService.class),
+                mock(AccessControlService.class),
+                mock(ParentContentLifecycleService.class));
+
+        assertEquals("请选择学期", assertThrows(IllegalArgumentException.class,
+                () -> service.exportCourseResultTemplate(
+                        null, "2027", 5, 41L, 51L, 61L)).getMessage());
+        assertEquals("请选择届次", assertThrows(IllegalArgumentException.class,
+                () -> service.exportCourseResultTemplate(
+                        31L, "", 5, 41L, 51L, 61L)).getMessage());
+        assertEquals("请选择年级", assertThrows(IllegalArgumentException.class,
+                () -> service.exportCourseResultTemplate(
+                        31L, "2027", null, 41L, 51L, 61L)).getMessage());
+        assertEquals("请选择班级", assertThrows(IllegalArgumentException.class,
+                () -> service.exportCourseResultTemplate(
+                        31L, "2027", 5, null, 51L, 61L)).getMessage());
+        assertEquals("请选择科目", assertThrows(IllegalArgumentException.class,
+                () -> service.exportCourseResultTemplate(
+                        31L, "2027", 5, 41L, null, 61L)).getMessage());
+        assertEquals("请选择考试类型", assertThrows(IllegalArgumentException.class,
+                () -> service.exportCourseResultTemplate(
+                        31L, "2027", 5, 41L, 51L, null)).getMessage());
+    }
 
     @Test
     void completeFileIsSentToOneLifecycleBatch() throws Exception {

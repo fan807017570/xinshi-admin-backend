@@ -114,7 +114,7 @@ implements HandlerInterceptor {
         }
         if (PATH_MATCHER.match("/api/class-subjects/**", path)) {
             if (HttpMethod.GET.matches(method)) {
-                return new String[]{"SUPER_ADMIN", "HEAD_TEACHER"};
+                return new String[]{"SUPER_ADMIN", "HEAD_TEACHER", "TEACHER"};
             }
             return new String[]{"SUPER_ADMIN", "HEAD_TEACHER"};
         }
@@ -172,17 +172,18 @@ implements HandlerInterceptor {
         if (PATH_MATCHER.match("/api/course-results/export-template", path)) {
             return new String[]{"SUPER_ADMIN", "HEAD_TEACHER", "TEACHER"};
         }
-        if (PATH_MATCHER.match("/api/course-results/import", path)) {
+        if (PATH_MATCHER.match("/api/course-results/import", path)
+                || PATH_MATCHER.match("/api/course-results/import/**", path)) {
             return new String[]{"SUPER_ADMIN", "HEAD_TEACHER", "TEACHER"};
         }
         // Excel 导入导出：综合评价与荣誉模版
         if (PATH_MATCHER.match("/api/head-teacher/export-template", path)) {
             return new String[]{"SUPER_ADMIN", "HEAD_TEACHER"};
         }
-        if (PATH_MATCHER.match("/api/head-teacher/import", path)) {
+        if (PATH_MATCHER.match("/api/head-teacher/import", path)
+                || PATH_MATCHER.match("/api/head-teacher/import/**", path)) {
             return new String[]{"SUPER_ADMIN", "HEAD_TEACHER"};
         }
         return new String[]{"SUPER_ADMIN"};
     }
 }
-

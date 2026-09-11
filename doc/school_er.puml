@@ -1,0 +1,263 @@
+@startuml
+' ============================================================
+'  图 B · 教学与成绩域
+' ============================================================
+title 图 B · 教学与成绩域\n<size:11>学校主数据 · 教学配置 · 成绩评语荣誉</size>
+
+hide circle
+skinparam dpi 130
+skinparam linetype ortho
+skinparam nodesep 25
+skinparam ranksep 45
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam packageStyle rectangle
+skinparam ArrowColor #7a7a7a
+skinparam ArrowFontSize 10
+skinparam DefaultFontName "Helvetica"
+skinparam DefaultFontSize 11
+skinparam EntityFontStyle bold
+skinparam EntityBorderColor #333333
+skinparam package {
+  BackgroundColor #FFFFFF
+  BorderColor #666666
+  FontStyle bold
+  FontSize 13
+}
+
+legend right
+  |= 模块 |= 说明 |
+  |<back:#FCF3CF>  </back> 学校主数据 | 班级 / 学生 / 学期 / 考试类型 / 科目 |
+  |<back:#E8DAEF>  </back> 教学配置 | 年级科目 / 班级科目 |
+  |<back:#FADBD8>  </back> 成绩评语 | 成绩 / 总评 / 荣誉 |
+  |<back:#D5F5E3>  </back> 教师引用 | SYS_USER 精简引用 |
+endlegend
+
+' ---------- ① 学校主数据 ----------
+package "① 学校主数据" #FCF3CF {
+  skinparam entity {
+    BackgroundColor #FEF9E7
+    BorderColor #B7950B
+  }
+
+  together {
+    entity "SCHOOL_CLASS\n【班级】" as CLASS {
+      id                   : bigint  <<PK>>
+      --
+      class_code           : varchar <<UK>>
+      class_name           : varchar
+      grade_session        : varchar
+      grade_level          : tinyint
+      head_teacher_user_id : bigint  <<FK>>
+      status               : tinyint
+      is_deleted           : tinyint
+      created_at           : datetime
+      updated_at           : datetime
+    }
+
+    entity "SCHOOL_STUDENT\n【学生】" as STUDENT {
+      id                 : bigint  <<PK>>
+      --
+      student_no         : varchar <<UK>>
+      student_name       : varchar
+      gender             : tinyint
+      class_id           : bigint  <<FK>>
+      id_card_last4_hmac : char
+      status             : tinyint
+      is_deleted         : tinyint
+      created_at         : datetime
+      updated_at         : datetime
+    }
+  }
+
+  together {
+    entity "SCHOOL_ACADEMIC_TERM\n【学期】" as ACADEMIC_TERM {
+      id            : bigint  <<PK>>
+      --
+      term_code     : varchar <<UK>>
+      academic_year : varchar
+      term_name     : varchar
+      start_date    : date
+      end_date      : date
+      status        : tinyint
+      created_at    : datetime
+      updated_at    : datetime
+    }
+
+    entity "SCHOOL_EXAM_TYPE\n【考试类型】" as EXAM_TYPE {
+      id             : bigint  <<PK>>
+      --
+      exam_type_code : varchar <<UK>>
+      exam_type_name : varchar
+      sort_order     : int
+      status         : tinyint
+      created_at     : datetime
+      updated_at     : datetime
+    }
+
+    entity "SCHOOL_SUBJECT\n【科目】" as SUBJECT {
+      id           : bigint  <<PK>>
+      --
+      subject_code : varchar <<UK>>
+      subject_name : varchar <<UK>>
+      min_score    : decimal
+      max_score    : decimal
+      status       : tinyint
+      created_at   : datetime
+      updated_at   : datetime
+    }
+  }
+}
+
+' ---------- ② 教学配置 ----------
+package "② 教学配置" #E8DAEF {
+  skinparam entity {
+    BackgroundColor #F4ECF7
+    BorderColor #6C3483
+  }
+
+  together {
+    entity "SCHOOL_GRADE_SUBJECT\n【年级开设科目】" as GRADE_SUBJECT {
+      id               : bigint  <<PK>>
+      --
+      academic_term_id : bigint  <<FK>>
+      grade_level      : tinyint
+      subject_id       : bigint  <<FK>>
+      is_required      : tinyint
+      sort_order       : int
+      status           : tinyint
+      created_at       : datetime
+      updated_at       : datetime
+    }
+
+    entity "SCHOOL_CLASS_SUBJECT\n【班级授课科目】" as CLASS_SUBJECT {
+      id                      : bigint  <<PK>>
+      --
+      academic_term_id        : bigint  <<FK>>
+      class_id                : bigint  <<FK>>
+      subject_id              : bigint  <<FK>>
+      source_grade_subject_id : bigint  <<FK>>
+      teacher_user_id         : bigint  <<FK>>
+      status                  : tinyint
+      created_at              : datetime
+      updated_at              : datetime
+    }
+  }
+}
+
+' ---------- ③ 成绩 / 评语 / 荣誉 ----------
+package "③ 成绩 / 评语 / 荣誉" #FADBD8 {
+  skinparam entity {
+    BackgroundColor #FDEDEC
+    BorderColor #943126
+  }
+
+  together {
+    entity "SCHOOL_STUDENT_COURSE_RESULT\n【学生单科成绩】" as COURSE_RESULT {
+      id                  : bigint  <<PK>>
+      --
+      academic_term_id    : bigint  <<FK>>
+      class_subject_id    : bigint  <<FK>>
+      student_id          : bigint  <<FK>>
+      exam_type_id        : bigint  <<FK>>
+      score               : decimal
+      performance_comment : varchar
+      strengths           : varchar
+      improvement_points  : varchar
+      evaluator_user_id   : bigint  <<FK>>
+      evaluated_at        : datetime
+      status              : tinyint
+      created_at          : datetime
+      updated_at          : datetime
+    }
+
+    entity "SCHOOL_STUDENT_OVERALL_COMMENT\n【学生总评】" as OVERALL_COMMENT {
+      id                    : bigint  <<PK>>
+      --
+      academic_term_id      : bigint  <<FK>>
+      class_id              : bigint  <<FK>>
+      student_id            : bigint  <<FK>>
+      overall_comment       : text
+      strengths             : varchar
+      improvement_points    : varchar
+      evaluator_user_id     : bigint  <<FK>>
+      evaluated_at          : datetime
+      status                : tinyint
+      teacher_name_snapshot : varchar
+      published_at          : datetime
+      created_at            : datetime
+      updated_at            : datetime
+    }
+
+    entity "SCHOOL_STUDENT_ACHIEVEMENT\n【学生荣誉】" as ACHIEVEMENT {
+      id               : bigint  <<PK>>
+      --
+      academic_term_id : bigint  <<FK>>
+      student_id       : bigint  <<FK>>
+      achievement_text : varchar
+      sort_order       : int
+      status           : tinyint
+      awarded_on       : date
+      published_at     : datetime
+      created_at       : datetime
+    }
+  }
+}
+
+' ---------- ④ 教师引用（跨图） ----------
+package "④ 教师引用（来自 图 A）" #D5F5E3 {
+  skinparam entity {
+    BackgroundColor #EAFAF1
+    BorderColor #1E8449
+  }
+
+  entity "SYS_USER\n【后台用户 · 精简引用】\n<size:10>完整定义见 图 A</size>" as SYS_USER_REF {
+    id         : bigint  <<PK>>
+    --
+    login_name : varchar <<UK>>
+    real_name  : varchar
+    status     : tinyint
+  }
+}
+
+' ============================================================
+'  关系
+' ============================================================
+
+' 主数据内部
+CLASS         ||--o{ STUDENT                : contains
+
+' 教学配置
+ACADEMIC_TERM ||--o{ GRADE_SUBJECT          : configures
+SUBJECT       ||--o{ GRADE_SUBJECT          : includes
+ACADEMIC_TERM ||--o{ CLASS_SUBJECT          : schedules
+CLASS         ||--o{ CLASS_SUBJECT          : owns
+SUBJECT       ||--o{ CLASS_SUBJECT          : teaches
+GRADE_SUBJECT |o--o{ CLASS_SUBJECT          : sources
+
+' 教师
+SYS_USER_REF  |o--o{ CLASS_SUBJECT          : teacher
+
+' 成绩
+STUDENT       ||--o{ COURSE_RESULT          : receives
+ACADEMIC_TERM ||--o{ COURSE_RESULT          : groups
+CLASS_SUBJECT ||--o{ COURSE_RESULT          : evaluates
+EXAM_TYPE     |o--o{ COURSE_RESULT          : categorizes
+SYS_USER_REF  ||--o{ COURSE_RESULT          : evaluator
+
+' 总评
+STUDENT       ||--o{ OVERALL_COMMENT        : receives
+ACADEMIC_TERM ||--o{ OVERALL_COMMENT        : groups
+CLASS         ||--o{ OVERALL_COMMENT        : records
+SYS_USER_REF  |o--o{ OVERALL_COMMENT        : evaluates
+
+' 荣誉
+STUDENT       ||--o{ ACHIEVEMENT            : earns
+ACADEMIC_TERM ||--o{ ACHIEVEMENT            : groups
+
+note bottom of SYS_USER_REF
+  此实体完整字段与角色关系定义在「图 A · 家长端认证与绑定域」。
+  这里作为引用占位，仅保留教学/评价相关字段。
+end note
+
+@enduml

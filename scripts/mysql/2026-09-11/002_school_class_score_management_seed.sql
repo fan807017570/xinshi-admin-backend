@@ -45,9 +45,19 @@ INSERT INTO school_academic_term (id, term_code, academic_year, term_name, start
 VALUES
     (1, '2025-2026-1', '2025-2026', '2025-2026 学年第一学期', '2025-09-01', '2026-01-31', 1);
 
+INSERT INTO school_enroll_grade (grade_level, grade_name, status)
+VALUES
+    (7, '初中一年级', 1),
+    (8, '初中二年级', 1),
+    (9, '初中三年级', 1),
+    (10, '高中一年级', 1),
+    (11, '高中二年级', 1),
+    (12, '高中三年级', 1)
+ON DUPLICATE KEY UPDATE grade_name = VALUES(grade_name), status = VALUES(status);
+
 INSERT INTO school_class (id, class_code, class_name, grade_session, grade_level, head_teacher_user_id, is_key_class, status)
 VALUES
-    (1, 'G2025-1-1', '2025届一年级1班', '2025届', 1, 2, 1, 1);
+    (1, 'G2025-7-1', '初中一年级(1)班', '2025', 7, 2, 1, 1);
 
 INSERT INTO school_subject (id, subject_code, subject_name, min_score, max_score, status)
 VALUES
@@ -57,9 +67,9 @@ VALUES
 
 INSERT INTO school_grade_subject (id, academic_term_id, grade_level, subject_id, is_required, sort_order, status)
 VALUES
-    (1, 1, 1, 1, 1, 1, 1),
-    (2, 1, 1, 2, 1, 2, 1),
-    (3, 1, 1, 3, 1, 3, 1);
+    (1, 1, 7, 1, 1, 1, 1),
+    (2, 1, 7, 2, 1, 2, 1),
+    (3, 1, 7, 3, 1, 3, 1);
 
 INSERT INTO school_class_subject (id, academic_term_id, class_id, subject_id, source_grade_subject_id, teacher_user_id, status)
 VALUES

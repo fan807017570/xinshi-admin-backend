@@ -60,7 +60,7 @@ public class ParentContentLifecycleService {
             accessControlService.ensureHeadTeacherOrAdmin();
             Map<String, Object> row = lockComment(id);
             long classId = longValue(row, "classId");
-            accessControlService.ensureCanAccessClass(classId);
+            accessControlService.ensureCanManageHeadTeacherClass(classId);
             validateActiveCommentScope(row);
             CommentText text = normalizeComment(
                     stringValue(row, "overallComment"),
@@ -89,7 +89,7 @@ public class ParentContentLifecycleService {
         return requiredTransactionResult(() -> {
             accessControlService.ensureHeadTeacherOrAdmin();
             Map<String, Object> row = lockComment(id);
-            accessControlService.ensureCanAccessClass(longValue(row, "classId"));
+            accessControlService.ensureCanManageHeadTeacherClass(longValue(row, "classId"));
             boolean alreadyDraft = intValue(row, "status") == DRAFT_STATUS
                     && row.get("publishedAt") == null
                     && isBlank(stringValue(row, "teacherNameSnapshot"));
@@ -133,8 +133,8 @@ public class ParentContentLifecycleService {
             int sortOrder) {
         String normalizedText = normalizeAchievement(achievementText);
         return requiredTransactionResult(() -> {
-            accessControlService.ensureCanGenerateTranscript();
-            accessControlService.ensureCanAccessStudent(studentId);
+            accessControlService.ensureHeadTeacherOrAdmin();
+            accessControlService.ensureCanManageHeadTeacherStudent(studentId);
             validateActiveAchievementScope(academicTermId, studentId);
             long id = insertAchievement(
                     academicTermId, studentId, honorTypeId, normalizedText, Math.max(sortOrder, 0));
@@ -150,10 +150,10 @@ public class ParentContentLifecycleService {
             int sortOrder) {
         String normalizedText = normalizeAchievement(achievementText);
         requiredTransactionResult(() -> {
-            accessControlService.ensureCanGenerateTranscript();
+            accessControlService.ensureHeadTeacherOrAdmin();
             Map<String, Object> row = lockAchievement(id);
             long studentId = longValue(row, "studentId");
-            accessControlService.ensureCanAccessStudent(studentId);
+            accessControlService.ensureCanManageHeadTeacherStudent(studentId);
             validateActiveAchievementScope(longValue(row, "academicTermId"), studentId);
             int updated = jdbcTemplate.update(
                     "UPDATE school_student_achievement SET honor_type_id=?,achievement_text=?,"
@@ -167,10 +167,10 @@ public class ParentContentLifecycleService {
 
     public void deleteAchievement(long id) {
         requiredTransactionResult(() -> {
-            accessControlService.ensureCanGenerateTranscript();
+            accessControlService.ensureHeadTeacherOrAdmin();
             Map<String, Object> row = lockAchievement(id);
             long studentId = longValue(row, "studentId");
-            accessControlService.ensureCanAccessStudent(studentId);
+            accessControlService.ensureCanManageHeadTeacherStudent(studentId);
             if (intValue(row, "status") == PUBLISHED_STATUS || row.get("publishedAt") != null) {
                 throw new IllegalArgumentException("已发布荣誉不能删除，请先撤回");
             }
@@ -188,7 +188,7 @@ public class ParentContentLifecycleService {
             accessControlService.ensureHeadTeacherOrAdmin();
             Map<String, Object> row = lockAchievement(id);
             long studentId = longValue(row, "studentId");
-            accessControlService.ensureCanAccessStudent(studentId);
+            accessControlService.ensureCanManageHeadTeacherStudent(studentId);
             validateActiveAchievementScope(longValue(row, "academicTermId"), studentId);
             normalizeAchievement(stringValue(row, "achievementText"));
             boolean alreadyPublished = intValue(row, "status") == PUBLISHED_STATUS
@@ -210,7 +210,7 @@ public class ParentContentLifecycleService {
             accessControlService.ensureHeadTeacherOrAdmin();
             Map<String, Object> row = lockAchievement(id);
             long studentId = longValue(row, "studentId");
-            accessControlService.ensureCanAccessStudent(studentId);
+            accessControlService.ensureCanManageHeadTeacherStudent(studentId);
             boolean alreadyDraft = intValue(row, "status") == DRAFT_STATUS
                     && row.get("publishedAt") == null;
             if (!alreadyDraft) {
@@ -348,7 +348,7 @@ public class ParentContentLifecycleService {
             CommentText text,
             long evaluatorUserId,
             String action) {
-        accessControlService.ensureCanAccessClass(classId);
+        accessControlService.ensureCanManageHeadTeacherClass(classId);
         validateActiveScope(academicTermId, studentId, classId);
         Map<String, Object> existing = lockCommentByTermAndStudent(academicTermId, studentId);
         Timestamp now = Timestamp.valueOf(LocalDateTime.now());
@@ -374,7 +374,7 @@ public class ParentContentLifecycleService {
             long academicTermId,
             long studentId,
             List<AchievementImportItem> importedItems) {
-        accessControlService.ensureCanAccessStudent(studentId);
+        accessControlService.ensureCanManageHeadTeacherStudent(studentId);
         validateActiveAchievementScope(academicTermId, studentId);
         List<Map<String, Object>> existingRows = jdbcTemplate.queryForList(
                 "SELECT id,academic_term_id AS academicTermId,student_id AS studentId,"
@@ -395,9 +395,20 @@ public class ParentContentLifecycleService {
             }
             String text = normalizeAchievement(item.getAchievementText());
             if (item.getId() == null) {
-                long id = insertAchievement(
-                        academicTermId, studentId, item.getHonorTypeId(), text, nextSortOrder++);
-                appendAudit(CONTENT_ACHIEVEMENT, id, ACTION_IMPORT);
+                Map.Entry<Long, Map<String, Object>> matched = findMatchingAchievement(
+                        remaining, item.getHonorTypeId(), text);
+                if (matched == null) {
+                    long id = insertAchievement(
+                            academicTermId, studentId, item.getHonorTypeId(), text, nextSortOrder++);
+                    appendAudit(CONTENT_ACHIEVEMENT, id, ACTION_IMPORT);
+                } else {
+                    remaining.remove(matched.getKey());
+                    int updated = jdbcTemplate.update(
+                            "UPDATE school_student_achievement SET status=1,published_at=NULL WHERE id=?",
+                            matched.getKey());
+                    requireSingleUpdate(updated, "导入荣誉更新失败");
+                    appendAudit(CONTENT_ACHIEVEMENT, matched.getKey(), ACTION_IMPORT);
+                }
                 continue;
             }
             Map<String, Object> existing = remaining.remove(item.getId());
@@ -428,6 +439,22 @@ public class ParentContentLifecycleService {
             }
             appendAudit(CONTENT_ACHIEVEMENT, entry.getKey(), ACTION_IMPORT);
         }
+    }
+
+    private Map.Entry<Long, Map<String, Object>> findMatchingAchievement(
+            Map<Long, Map<String, Object>> remaining,
+            Long honorTypeId,
+            String achievementText) {
+        for (Map.Entry<Long, Map<String, Object>> entry : remaining.entrySet()) {
+            Map<String, Object> row = entry.getValue();
+            Long existingHonorTypeId = row.get("honorTypeId") instanceof Number
+                    ? ((Number)row.get("honorTypeId")).longValue() : null;
+            if (Objects.equals(honorTypeId, existingHonorTypeId)
+                    && achievementText.equals(stringValue(row, "achievementText"))) {
+                return entry;
+            }
+        }
+        return null;
     }
 
     private Map<String, Object> lockComment(long id) {
@@ -499,7 +526,7 @@ public class ParentContentLifecycleService {
                         + "WHERE u.id=? AND u.status=1 AND u.is_deleted=0 "
                         + "AND EXISTS (SELECT 1 FROM sys_user_role ur "
                         + "JOIN sys_role r ON r.id=ur.role_id AND r.status=1 "
-                        + "WHERE ur.user_id=u.id AND r.role_code IN ('TEACHER','HEAD_TEACHER'))",
+                        + "WHERE ur.user_id=u.id AND r.role_code IN ('SUPER_ADMIN','TEACHER','HEAD_TEACHER'))",
                 evaluatorUserId);
         if (rows.size() != 1) {
             throw new IllegalArgumentException("评语教师不存在或已停用");

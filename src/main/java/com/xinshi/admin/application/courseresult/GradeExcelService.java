@@ -47,141 +47,169 @@ public class GradeExcelService extends SchoolBaseService {
 
     // ==================== 场景 A：单科成绩导出 ====================
 
-    public Path exportCourseResultTemplate(long academicTermId, long classId,
-                                           long subjectId, Long examTypeId) {
+    public Path exportCourseResultTemplate(Long academicTermId, String gradeSession, Integer gradeLevel,
+                                           Long classId, Long subjectId, Long examTypeId) {
+        validateCourseExportParameters(academicTermId, gradeSession, gradeLevel, classId, subjectId, examTypeId);
         accessControlService.ensureTeacherCanWriteResults();
-        // 任课老师只能导出自己任教课程的模版，班主任/管理员可导出班级全部课程
-        ensureCanExportSubject(academicTermId, classId, subjectId);
+        accessControlService.ensureCanManageCourseContext(academicTermId, classId, subjectId);
 
-        // 查询科目信息
-        List<Map<String, Object>> subjects = jdbcTemplate.queryForList(
-            "SELECT subject_name AS subjectName, min_score AS minScore, max_score AS maxScore " +
-            "FROM school_subject WHERE id = ?", subjectId);
-        if (subjects.isEmpty()) throw new IllegalArgumentException("科目不存在");
-        String subjectName = (String) subjects.get(0).get("subjectName");
-        double minScore = ((Number) subjects.get(0).get("minScore")).doubleValue();
-        double maxScore = ((Number) subjects.get(0).get("maxScore")).doubleValue();
+        Map<String, Object> context = loadCourseTemplateContext(
+                academicTermId, gradeSession.trim(), gradeLevel, classId, subjectId, examTypeId);
+        long classSubjectId = ((Number)context.get("classSubjectId")).longValue();
+        double minScore = ((Number)context.get("minScore")).doubleValue();
+        double maxScore = ((Number)context.get("maxScore")).doubleValue();
+        String className = strVal(context, "className");
+        String subjectName = strVal(context, "subjectName");
 
-        String termName = getTermName(academicTermId);
-        String className = getClassName(classId);
-        String examTypeName = examTypeId != null ? getExamTypeName(examTypeId) : "";
-
-        List<Map<String, Object>> csList = jdbcTemplate.queryForList(
-            "SELECT id FROM school_class_subject " +
-            "WHERE academic_term_id = ? AND class_id = ? AND subject_id = ? AND status = 1",
-            academicTermId, classId, subjectId);
-        if (csList.isEmpty()) throw new IllegalArgumentException("该班级未配置此科目，请先在课程管理中为班级添加科目");
-        long classSubjectId = ((Number) csList.get(0).get("id")).longValue();
-
-        // 查询考试类型列表（用于下拉）
-        List<String> examTypeNames = getExamTypeNames();
-
-        // 查询学生及已有成绩（子查询确保一个学生最多匹配一条记录）
-        String sql = "SELECT s.id AS studentId, s.student_no AS studentNo, " +
-            "s.student_name AS studentName, r.score, r.performance_comment AS performanceComment, " +
-            "r.strengths, r.improvement_points AS improvementPoints, r.exam_type_id AS examTypeId " +
-            "FROM school_class_subject cs " +
-            "JOIN school_student s ON s.class_id = cs.class_id AND s.is_deleted = 0 AND s.status = 1 " +
-            "LEFT JOIN school_student_course_result r ON r.id = ( " +
-            "  SELECT r2.id FROM school_student_course_result r2 " +
-            "  WHERE r2.academic_term_id = cs.academic_term_id " +
-            "  AND r2.class_subject_id = cs.id AND r2.student_id = s.id " +
-            "  AND (? IS NULL OR r2.exam_type_id = ?) " +
-            "  ORDER BY r2.updated_at DESC LIMIT 1 " +
-            ") " +
-            "WHERE cs.id = ? ORDER BY s.student_no";
-        List<Map<String, Object>> students = jdbcTemplate.queryForList(sql, examTypeId, examTypeId, classSubjectId);
+        List<Map<String, Object>> students = jdbcTemplate.queryForList(
+                "SELECT s.id AS studentId, s.student_no AS studentNo, s.student_name AS studentName, "
+                        + "r.score, r.performance_comment AS performanceComment, r.strengths, "
+                        + "r.improvement_points AS improvementPoints "
+                        + "FROM school_student s "
+                        + "LEFT JOIN school_student_course_result r ON r.id = ("
+                        + "SELECT r2.id FROM school_student_course_result r2 "
+                        + "WHERE r2.academic_term_id = ? AND r2.class_subject_id = ? "
+                        + "AND r2.student_id = s.id AND r2.exam_type_id = ? "
+                        + "ORDER BY r2.updated_at DESC, r2.id DESC LIMIT 1) "
+                        + "WHERE s.class_id = ? AND s.is_deleted = 0 AND s.status = 1 ORDER BY s.student_no, s.id",
+                academicTermId, classSubjectId, examTypeId, classId);
 
         try {
             Files.createDirectories(Paths.get(EXCEL_OUTPUT_DIR));
-            XSSFWorkbook wb = new XSSFWorkbook();
-            Sheet sheet = wb.createSheet("成绩模版");
-            sheet.setDefaultRowHeight(ROW_HEIGHT);
-
-            CellStyle headerStyle = createHeaderStyle(wb);
-            CellStyle hintStyle = createHintStyle(wb);
-            CellStyle dataStyle = createDataStyle(wb);
-            CellStyle numberStyle = createNumberStyle(wb);
-
-            // 第 1 行：标题
-            Row titleRow = sheet.createRow(0);
-            titleRow.setHeight(HEADER_ROW_HEIGHT);
-            String[] titles = {"学号", "姓名", "学期", "班级", "科目", "考试类型（下拉选择）",
-                "成绩（" + String.format("%.2f", minScore) + "-" + String.format("%.2f", maxScore) + "）",
-                "课程表现", "优点", "改进点"};
-            for (int i = 0; i < titles.length; i++) {
-                Cell cell = titleRow.createCell(i);
-                cell.setCellValue(titles[i]);
-                cell.setCellStyle(headerStyle);
-            }
-
-            // 第 2 行：说明
-            Row hintRow = sheet.createRow(1);
-            Cell hintCell = hintRow.createCell(0);
-            hintCell.setCellValue("A-E 列为系统预填，请勿修改。F 列考试类型请从下拉选择。请在 G-J 列填写成绩和评语。K-M 列为系统数据已隐藏。");
-            hintCell.setCellStyle(hintStyle);
-            sheet.addMergedRegion(new CellRangeAddress(1, 1, 0, 9));
-
-            // 数据行
-            int rowNum = 2;
-            for (Map<String, Object> s : students) {
-                Row row = sheet.createRow(rowNum);
-                row.setHeight(ROW_HEIGHT);
-                setCell(row, 0, strVal(s, "studentNo"), dataStyle);
-                setCell(row, 1, strVal(s, "studentName"), dataStyle);
-                setCell(row, 2, termName, dataStyle);
-                setCell(row, 3, className, dataStyle);
-                setCell(row, 4, subjectName, dataStyle);
-                // F 列：优先用已有成绩的考试类型名称，否则用筛选条件的考试类型
-                String rowExamTypeName = examTypeName;
-                Long rowExamTypeId = examTypeId;
-                if (s.get("examTypeId") != null) {
-                    rowExamTypeId = ((Number) s.get("examTypeId")).longValue();
-                    rowExamTypeName = getExamTypeName(rowExamTypeId);
+            try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+                createCourseTemplateMetadataSheet(workbook, context);
+                createCourseTemplateDataSheet(workbook, students, minScore, maxScore);
+                String fileName = "成绩模版_" + className + "_" + subjectName + ".xlsx";
+                Path filePath = Paths.get(EXCEL_OUTPUT_DIR, fileName);
+                try (FileOutputStream output = new FileOutputStream(filePath.toFile())) {
+                    workbook.write(output);
                 }
-                setCell(row, 5, rowExamTypeName, dataStyle);
-                if (s.get("score") != null) {
-                    Cell sc = row.createCell(6);
-                    sc.setCellValue(((Number) s.get("score")).doubleValue());
-                    sc.setCellStyle(numberStyle);
-                } else {
-                    row.createCell(6).setCellStyle(numberStyle);
-                }
-                setCell(row, 7, strVal(s, "performanceComment"), dataStyle);
-                setCell(row, 8, strVal(s, "strengths"), dataStyle);
-                setCell(row, 9, strVal(s, "improvementPoints"), dataStyle);
-                Cell sid = row.createCell(10); sid.setCellValue(((Number) s.get("studentId")).longValue());
-                Cell cid = row.createCell(11); cid.setCellValue(classSubjectId);
-                Cell eid = row.createCell(12);
-                if (rowExamTypeId != null) eid.setCellValue(rowExamTypeId);
-                rowNum++;
+                log.info("Exported course result template: path={}, classSubjectId={}, examTypeId={}",
+                        filePath.toAbsolutePath(), classSubjectId, examTypeId);
+                return filePath;
             }
-
-            // 考试类型下拉（F列，从第3行到数据末尾）
-            if (!examTypeNames.isEmpty()) {
-                addDropdownValidation(sheet, examTypeNames, 5, 2, rowNum - 1);
-            }
-
-            // 列宽
-            sheet.setColumnWidth(0, 14 * 256); sheet.setColumnWidth(1, 14 * 256);
-            sheet.setColumnWidth(2, 20 * 256); sheet.setColumnWidth(3, 16 * 256);
-            sheet.setColumnWidth(4, 14 * 256); sheet.setColumnWidth(5, 18 * 256);
-            sheet.setColumnWidth(6, 18 * 256); sheet.setColumnWidth(7, 32 * 256);
-            sheet.setColumnWidth(8, 32 * 256); sheet.setColumnWidth(9, 32 * 256);
-
-            sheet.setColumnHidden(10, true); sheet.setColumnHidden(11, true); sheet.setColumnHidden(12, true);
-            sheet.createFreezePane(0, 2);
-
-            String fileName = "成绩模版_" + className + "_" + subjectName + ".xlsx";
-            Path filePath = Paths.get(EXCEL_OUTPUT_DIR, fileName);
-            try (FileOutputStream fos = new FileOutputStream(filePath.toFile())) { wb.write(fos); }
-            wb.close();
-            log.info("导出单科成绩模版: {}", filePath.toAbsolutePath());
-            return filePath;
-        } catch (IOException e) {
-            log.error("导出单科成绩模版失败", e);
-            throw new IllegalStateException("导出模版失败: " + e.getMessage(), e);
+        } catch (IOException exception) {
+            log.error("Failed to export course result template", exception);
+            throw new IllegalStateException("导出模版失败: " + exception.getMessage(), exception);
         }
+    }
+
+    private void validateCourseExportParameters(Long academicTermId, String gradeSession, Integer gradeLevel,
+                                                Long classId, Long subjectId, Long examTypeId) {
+        if (academicTermId == null) throw new IllegalArgumentException("请选择学期");
+        if (isEmpty(gradeSession)) throw new IllegalArgumentException("请选择届次");
+        if (gradeLevel == null) throw new IllegalArgumentException("请选择年级");
+        if (classId == null) throw new IllegalArgumentException("请选择班级");
+        if (subjectId == null) throw new IllegalArgumentException("请选择科目");
+        if (examTypeId == null) throw new IllegalArgumentException("请选择考试类型");
+    }
+
+    private Map<String, Object> loadCourseTemplateContext(long academicTermId, String gradeSession,
+                                                          int gradeLevel, long classId,
+                                                          long subjectId, long examTypeId) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT cs.id AS classSubjectId, t.term_name AS termName, "
+                        + "c.class_name AS className, c.grade_session AS gradeSession, "
+                        + "c.grade_level AS gradeLevel, s.subject_name AS subjectName, "
+                        + "s.min_score AS minScore, s.max_score AS maxScore, "
+                        + "e.exam_type_name AS examTypeName "
+                        + "FROM school_class_subject cs "
+                        + "JOIN school_academic_term t ON t.id = cs.academic_term_id AND t.status = 1 "
+                        + "JOIN school_class c ON c.id = cs.class_id AND c.status = 1 AND c.is_deleted = 0 "
+                        + "JOIN school_subject s ON s.id = cs.subject_id AND s.status = 1 "
+                        + "JOIN school_exam_type e ON e.id = ? AND e.status = 1 "
+                        + "WHERE cs.academic_term_id = ? AND cs.class_id = ? "
+                        + "AND cs.subject_id = ? AND cs.status = 1",
+                examTypeId, academicTermId, classId, subjectId);
+        if (rows.size() != 1) {
+            throw new IllegalArgumentException("所选学期、班级、科目或考试类型无效");
+        }
+        Map<String, Object> context = rows.get(0);
+        if (!gradeSession.equals(strVal(context, "gradeSession"))
+                || gradeLevel != ((Number)context.get("gradeLevel")).intValue()) {
+            throw new IllegalArgumentException("届次、年级与所选班级不一致");
+        }
+        context.put("academicTermId", academicTermId);
+        context.put("classId", classId);
+        context.put("subjectId", subjectId);
+        context.put("examTypeId", examTypeId);
+        return context;
+    }
+
+    private void createCourseTemplateMetadataSheet(XSSFWorkbook workbook, Map<String, Object> context) {
+        XSSFSheet sheet = workbook.createSheet("模版说明");
+        String[][] values = {
+            {"template_type", "COURSE_RESULT"},
+            {"template_version", "2.0"},
+            {"academic_term_id", strVal(context, "academicTermId")},
+            {"academic_term_name", strVal(context, "termName")},
+            {"grade_session", strVal(context, "gradeSession")},
+            {"grade_level", strVal(context, "gradeLevel")},
+            {"class_id", strVal(context, "classId")},
+            {"class_name", strVal(context, "className")},
+            {"subject_id", strVal(context, "subjectId")},
+            {"subject_name", strVal(context, "subjectName")},
+            {"exam_type_id", strVal(context, "examTypeId")},
+            {"exam_type_name", strVal(context, "examTypeName")},
+            {"exported_at", Timestamp.valueOf(LocalDateTime.now()).toString()},
+            {"填写说明", "仅填写“成绩、课程表现、优点、改进点”；学号、姓名和本页上下文请勿修改。"}
+        };
+        CellStyle keyStyle = createHeaderStyle(workbook);
+        CellStyle valueStyle = createWrapStyle(workbook);
+        for (int index = 0; index < values.length; index++) {
+            Row row = sheet.createRow(index);
+            setCell(row, 0, values[index][0], keyStyle);
+            setCell(row, 1, values[index][1], valueStyle);
+        }
+        sheet.setColumnWidth(0, 24 * 256);
+        sheet.setColumnWidth(1, 72 * 256);
+        sheet.protectSheet("xinshi-template-v2");
+    }
+
+    private void createCourseTemplateDataSheet(XSSFWorkbook workbook, List<Map<String, Object>> students,
+                                               double minScore, double maxScore) {
+        XSSFSheet sheet = workbook.createSheet("成绩录入");
+        sheet.setDefaultRowHeight(ROW_HEIGHT);
+        CellStyle headerStyle = createHeaderStyle(workbook);
+        CellStyle readOnlyStyle = createDataStyle(workbook);
+        CellStyle editableNumberStyle = createNumberStyle(workbook);
+        editableNumberStyle.setLocked(false);
+        CellStyle editableTextStyle = createWrapStyle(workbook);
+        editableTextStyle.setLocked(false);
+
+        Row header = sheet.createRow(0);
+        header.setHeight(HEADER_ROW_HEIGHT);
+        String[] titles = {
+            "学号", "姓名",
+            "成绩（" + String.format(Locale.ROOT, "%.2f", minScore) + "-"
+                    + String.format(Locale.ROOT, "%.2f", maxScore) + "）",
+            "课程表现", "优点", "改进点"
+        };
+        for (int index = 0; index < titles.length; index++) {
+            setCell(header, index, titles[index], headerStyle);
+        }
+        int rowNumber = 1;
+        for (Map<String, Object> student : students) {
+            Row row = sheet.createRow(rowNumber++);
+            setCell(row, 0, strVal(student, "studentNo"), readOnlyStyle);
+            setCell(row, 1, strVal(student, "studentName"), readOnlyStyle);
+            Cell scoreCell = row.createCell(2);
+            scoreCell.setCellStyle(editableNumberStyle);
+            if (student.get("score") != null) {
+                scoreCell.setCellValue(((Number)student.get("score")).doubleValue());
+            }
+            setCell(row, 3, strVal(student, "performanceComment"), editableTextStyle);
+            setCell(row, 4, strVal(student, "strengths"), editableTextStyle);
+            setCell(row, 5, strVal(student, "improvementPoints"), editableTextStyle);
+        }
+        sheet.setColumnWidth(0, 18 * 256);
+        sheet.setColumnWidth(1, 16 * 256);
+        sheet.setColumnWidth(2, 22 * 256);
+        sheet.setColumnWidth(3, 36 * 256);
+        sheet.setColumnWidth(4, 36 * 256);
+        sheet.setColumnWidth(5, 36 * 256);
+        sheet.createFreezePane(0, 1);
+        sheet.protectSheet("xinshi-template-v2");
     }
 
     // ==================== 场景 A：单科成绩导入 ====================
@@ -213,8 +241,14 @@ public class GradeExcelService extends SchoolBaseService {
                     Long etId = resolveExamTypeId(getStringCellValue(row, 5), getLongCellValue(row, 12));
                     if (studentId == null || classSubjectId == null) { failed++; errors.add(createError(i + 1, getCellString(row, 1), "模版格式错误，缺少系统数据列")); continue; }
 
+                    accessControlService.ensureCanAccessClassSubject(classSubjectId);
+                    Long classId = getClassIdFromClassSubject(classSubjectId);
+                    if (classId == null) throw new IllegalArgumentException("班级课程不存在");
+                    accessControlService.ensureStudentBelongsToClass(studentId, classId);
                     validateSubjectScore(score, classSubjectId);
-                    upsertCourseResult(academicTermIdFromClassSubject(classSubjectId), classSubjectId, studentId, etId, score, perf, strengths, improv, evaluatorUserId);
+                    Long academicTermId = academicTermIdFromClassSubject(classSubjectId);
+                    if (academicTermId == null) throw new IllegalArgumentException("班级课程缺少学期信息");
+                    upsertCourseResult(academicTermId, classSubjectId, studentId, etId, score, perf, strengths, improv, evaluatorUserId);
                     success++;
                 } catch (Exception e) { failed++; errors.add(createError(i + 1, getCellString(row, 1), e.getMessage())); }
             }
@@ -228,8 +262,22 @@ public class GradeExcelService extends SchoolBaseService {
 
     // ==================== 场景 B：综合评价+荣誉导出（固定2行/学生，合并单元格，荣誉下拉） ====================
 
-    public Path exportHeadTeacherTemplate(long academicTermId, long classId) {
+    public Path exportHeadTeacherTemplate(Long academicTermId, String gradeSession,
+                                          Integer gradeLevel, Long classId) {
+        if (academicTermId == null) throw new IllegalArgumentException("请选择学期");
+        if (isEmpty(gradeSession)) throw new IllegalArgumentException("请选择届次");
+        if (gradeLevel == null) throw new IllegalArgumentException("请选择年级");
+        if (classId == null) throw new IllegalArgumentException("请选择班级");
         accessControlService.ensureHeadTeacherOrAdmin();
+        accessControlService.ensureCanManageHeadTeacherClass(classId);
+        Integer contextCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(1) FROM school_class c JOIN school_academic_term t ON t.id = ? AND t.status = 1 "
+                        + "WHERE c.id = ? AND c.grade_session = ? AND c.grade_level = ? "
+                        + "AND c.status = 1 AND c.is_deleted = 0",
+                Integer.class, academicTermId, classId, gradeSession.trim(), gradeLevel);
+        if (contextCount == null || contextCount != 1) {
+            throw new IllegalArgumentException("届次、年级、班级或学期上下文不一致");
+        }
 
         String termName = getTermName(academicTermId);
         String className = getClassName(classId);
@@ -415,8 +463,9 @@ public class GradeExcelService extends SchoolBaseService {
                     boolean hasComment = !isEmpty(oc), hasDetail = !isEmpty(st) || !isEmpty(ip);
                     boolean hasAnyCommentContent = hasComment || hasDetail;
 
-                    log.info("导入评语 studentId={}, overallComment=[{}], strengths=[{}], improvementPoints=[{}], hasComment={}",
-                        first.studentId, oc, st, ip, hasComment);
+                    log.info(
+                            "导入评语 studentId={}, overallCommentPresent={}, strengthsPresent={}, improvementPointsPresent={}",
+                            first.studentId, !isEmpty(oc), !isEmpty(st), !isEmpty(ip));
 
                     if (hasAnyCommentContent) {
                         if (enableAiPolish) {
@@ -560,6 +609,12 @@ public class GradeExcelService extends SchoolBaseService {
     private Long academicTermIdFromClassSubject(long classSubjectId) {
         Map<String, Object> cs = first(jdbcTemplate.queryForList("SELECT academic_term_id AS academicTermId FROM school_class_subject WHERE id = ?", classSubjectId));
         return cs.isEmpty() ? null : ((Number) cs.get("academicTermId")).longValue();
+    }
+
+    private Long getClassIdFromClassSubject(long classSubjectId) {
+        Map<String, Object> cs = first(jdbcTemplate.queryForList(
+                "SELECT class_id AS classId FROM school_class_subject WHERE id = ?", classSubjectId));
+        return cs.isEmpty() ? null : ((Number)cs.get("classId")).longValue();
     }
 
     private Long getClassIdForStudent(long studentId) {

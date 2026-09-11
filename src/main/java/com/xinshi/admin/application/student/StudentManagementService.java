@@ -49,7 +49,7 @@ extends SchoolBaseService {
 
     public PageResult<Map<String, Object>> listStudents(Long classId, String keyword, Integer status, PageRequest pageRequest) {
         if (classId != null) {
-            this.accessControlService.ensureCanAccessClass(classId);
+            this.accessControlService.ensureCanManageHeadTeacherClass(classId);
         }
         StringBuilder where = new StringBuilder(" WHERE s.is_deleted = 0");
         ArrayList<Object> args = new ArrayList<Object>();
@@ -91,7 +91,7 @@ extends SchoolBaseService {
         int gender = this.optionalInteger(request, "gender", 0);
         long classId = this.requiredLong(request, "classId");
         String remark = this.optionalString(request, "remark", null);
-        this.accessControlService.ensureCanAccessClass(classId);
+        this.accessControlService.ensureCanManageHeadTeacherClass(classId);
         Map<String, Object> clazz = this.classForStudentNo(classId);
         if (clazz.isEmpty()) {
             throw new IllegalArgumentException("班级不存在");

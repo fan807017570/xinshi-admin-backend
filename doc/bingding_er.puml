@@ -1,0 +1,310 @@
+@startuml
+' ============================================================
+'  图 A · 家长端认证与绑定域
+' ============================================================
+title 图 A · 家长端认证与绑定域\n<size:11>微信 OAuth · H5 会话 · 短信验证 · 家长绑定</size>
+
+hide circle
+skinparam dpi 130
+skinparam linetype ortho
+skinparam nodesep 25
+skinparam ranksep 45
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam packageStyle rectangle
+skinparam ArrowColor #7a7a7a
+skinparam ArrowFontSize 10
+skinparam DefaultFontName "Helvetica"
+skinparam DefaultFontSize 11
+skinparam EntityFontStyle bold
+skinparam EntityBorderColor #333333
+skinparam package {
+  BackgroundColor #FFFFFF
+  BorderColor #666666
+  FontStyle bold
+  FontSize 13
+}
+
+legend right
+  |= 模块 |= 说明 |
+  |<back:#D6EAF8>  </back> 微信接入 | App / 账号 / OAuth |
+  |<back:#D1F2EB>  </back> 会话验证 | H5 会话 / 短信验证 / 家长协议 |
+  |<back:#D5F5E3>  </back> 系统权限 | 用户 / 角色 / 关联 |
+  |<back:#FCF3CF>  </back> 家长绑定 | 学生-家长绑定 |
+  |<back:#FDEBD0>  </back> 查询上下文 | 成绩查询上下文 / Nonce |
+endlegend
+
+' ---------- ① 微信接入 ----------
+package "① 微信接入" #D6EAF8 {
+  skinparam entity {
+    BackgroundColor #EBF5FB
+    BorderColor #2874A6
+  }
+
+  together {
+    entity "SCHOOL_WECHAT_APP\n【微信应用】" as WECHAT_APP {
+      id                  : bigint   <<PK>>
+      --
+      appid               : varchar  <<UK>>
+      app_secret_ref      : varchar
+      oauth_scope         : varchar
+      oauth_callback_url  : varchar
+      h5_entry_url        : varchar
+      score_query_enabled : tinyint
+      status              : tinyint
+      created_at          : datetime
+      updated_at          : datetime
+    }
+
+    entity "SCHOOL_WECHAT_ACCOUNT\n【家长微信账号】" as WECHAT_ACCOUNT {
+      id                  : bigint   <<PK>>
+      --
+      appid               : varchar  <<FK>>
+      openid_hmac         : char     <<UK>>
+      openid_ciphertext   : varbinary
+      nickname_ciphertext : varbinary
+      parent_user_id      : bigint   <<FK>>
+      status              : tinyint
+      nickname_updated_at : datetime
+      created_at          : datetime
+      updated_at          : datetime
+    }
+
+    entity "SCHOOL_WECHAT_OAUTH_STATE\n【OAuth 状态】" as OAUTH_STATE {
+      id                            : bigint   <<PK>>
+      --
+      state_hash                    : char     <<UK>>
+      login_confirmation_token_hash : char     <<UK>>
+      preauth_cookie_hash           : char
+      appid                         : varchar  <<FK>>
+      return_path                   : varchar
+      confirmation_status           : varchar
+      expires_at                    : datetime
+      confirmed_at                  : datetime
+      consumed_at                   : datetime
+      created_at                    : datetime
+    }
+  }
+}
+
+' ---------- ② 会话与验证 ----------
+package "② 会话与验证" #D1F2EB {
+  skinparam entity {
+    BackgroundColor #E8F8F5
+    BorderColor #117864
+  }
+
+  together {
+    entity "SCHOOL_H5_SESSION\n【H5 会话】" as H5_SESSION {
+      id                    : bigint   <<PK>>
+      --
+      token_hash            : char     <<UK>>
+      csrf_token_hash       : char
+      wechat_account_id     : bigint   <<FK>>
+      parent_user_id        : bigint   <<FK>>
+      status                : tinyint
+      identity_fail_count   : int
+      identity_locked_until : datetime
+      last_access_at        : datetime
+      expires_at            : datetime
+      created_at            : datetime
+      updated_at            : datetime
+    }
+
+    entity "SCHOOL_MOBILE_VERIFICATION\n【手机验证码】" as MOBILE_VERIFICATION {
+      id              : bigint   <<PK>>
+      --
+      h5_session_id   : bigint   <<FK>>
+      mobile          : varchar
+      code_hmac       : char
+      purpose         : varchar
+      status          : varchar
+      verify_attempts : int
+      sent_at         : datetime
+      expires_at      : datetime
+      verified_at     : datetime
+      created_at      : datetime
+      updated_at      : datetime
+    }
+
+    entity "SCHOOL_PARENT_AGREEMENT\n【家长协议签署】" as PARENT_AGREEMENT {
+      id                : bigint  <<PK>>
+      --
+      parent_user_id    : bigint  <<FK>>
+      wechat_account_id : bigint  <<FK>>
+      agreement_version : varchar
+      agreed_at         : datetime
+      created_at        : datetime
+    }
+  }
+}
+
+' ---------- ③ 系统用户 / 权限 ----------
+package "③ 系统用户 / 权限" #D5F5E3 {
+  skinparam entity {
+    BackgroundColor #EAFAF1
+    BorderColor #1E8449
+  }
+
+  together {
+    entity "SYS_USER\n【后台用户】" as SYS_USER {
+      id            : bigint  <<PK>>
+      --
+      login_name    : varchar <<UK>>
+      password_hash : varchar
+      real_name     : varchar
+      mobile        : varchar
+      status        : tinyint
+      is_deleted    : tinyint
+      created_at    : datetime
+      updated_at    : datetime
+    }
+
+    entity "SYS_ROLE\n【角色】" as SYS_ROLE {
+      id         : bigint  <<PK>>
+      --
+      role_code  : varchar <<UK>>
+      role_name  : varchar
+      status     : tinyint
+      created_at : datetime
+      updated_at : datetime
+    }
+
+    entity "SYS_USER_ROLE\n【用户角色关联】" as SYS_USER_ROLE {
+      id         : bigint <<PK>>
+      --
+      user_id    : bigint <<FK>>
+      role_id    : bigint <<FK>>
+      created_at : datetime
+    }
+  }
+}
+
+' ---------- ④ 家长绑定 ----------
+package "④ 家长绑定" #FCF3CF {
+  skinparam entity {
+    BackgroundColor #FEF9E7
+    BorderColor #B7950B
+  }
+
+  together {
+    entity "SCHOOL_STUDENT\n【学生 · 精简引用】\n<size:10>完整定义见 图 B</size>" as STUDENT_REF {
+      id           : bigint  <<PK>>
+      --
+      student_no   : varchar <<UK>>
+      student_name : varchar
+      class_id     : bigint  <<FK>>
+    }
+
+    entity "SCHOOL_STUDENT_PARENT\n【学生-家长绑定】" as STUDENT_PARENT {
+      id             : bigint  <<PK>>
+      --
+      student_id     : bigint  <<FK>>
+      parent_user_id : bigint  <<FK>>
+      relation_type  : varchar
+      is_primary     : tinyint
+      binding_source : varchar
+      verified_at    : datetime
+      created_at     : datetime
+      updated_at     : datetime
+    }
+
+    entity "SCHOOL_STUDENT_GUARDIAN_CONTACT\n【监护人联系方式】" as GUARDIAN_CONTACT {
+      id            : bigint  <<PK>>
+      --
+      student_id    : bigint  <<FK>>
+      mobile_hmac   : char
+      mobile_masked : varchar
+      source        : varchar
+      status        : tinyint
+      verified_at   : datetime
+      created_at    : datetime
+      updated_at    : datetime
+    }
+  }
+}
+
+' ---------- ⑤ 查询上下文 / 内部服务 ----------
+package "⑤ 查询上下文 / 内部服务" #FDEBD0 {
+  skinparam entity {
+    BackgroundColor #FEF5E7
+    BorderColor #B9770E
+  }
+
+  together {
+    entity "SCHOOL_SCORE_QUERY_CONTEXT\n【成绩查询上下文】" as SCORE_CTX {
+      id                        : bigint   <<PK>>
+      --
+      appid                     : varchar  <<FK>>
+      openid_hmac               : char
+      msg_id_hash               : char     <<UK>>
+      intent                    : varchar
+      missing_slot_codes        : varchar
+      student_name_ciphertext   : varbinary
+      student_name_hmac         : char
+      year_value                : smallint
+      year_mode                 : varchar
+      academic_year             : varchar
+      term_no                   : tinyint
+      exam_type_code            : varchar
+      subject_name              : varchar
+      slots_ciphertext          : varbinary
+      wechat_account_id         : bigint   <<FK>>
+      resolved_student_id       : bigint   <<FK>>
+      resolved_academic_term_id : bigint   <<FK>>
+      resolved_exam_type_id     : bigint   <<FK>>
+      status                    : varchar
+      expires_at                : datetime
+      consumed_at               : datetime
+      created_at                : datetime
+      updated_at                : datetime
+    }
+
+    entity "SCHOOL_INTERNAL_REQUEST_NONCE\n【内部请求 Nonce】" as NONCE {
+      id         : bigint  <<PK>>
+      --
+      service_id : varchar
+      nonce_hash : char    <<UK>>
+      expires_at : datetime
+      created_at : datetime
+    }
+  }
+}
+
+' ============================================================
+'  关系
+' ============================================================
+
+' 微信域内部
+WECHAT_APP     ||--o{ WECHAT_ACCOUNT       : identifies
+WECHAT_APP     ||--o{ OAUTH_STATE          : authorizes
+WECHAT_APP     ||--o{ SCORE_CTX            : scopes
+
+' 微信 ↔ 会话
+WECHAT_ACCOUNT ||--o{ H5_SESSION           : creates
+H5_SESSION     ||--o{ MOBILE_VERIFICATION  : requests
+WECHAT_ACCOUNT ||--o{ PARENT_AGREEMENT     : records
+
+' 系统权限
+SYS_USER       ||--o{ SYS_USER_ROLE        : has
+SYS_ROLE       ||--o{ SYS_USER_ROLE        : grants
+
+' 系统 ↔ 微信
+SYS_USER       |o--o{ WECHAT_ACCOUNT       : links
+SYS_USER       ||--o{ PARENT_AGREEMENT     : agrees
+
+' 家长绑定
+STUDENT_REF    ||--o{ STUDENT_PARENT       : binds
+STUDENT_REF    ||--o{ GUARDIAN_CONTACT     : verifies
+SYS_USER       ||--o{ STUDENT_PARENT       : parent
+
+' 成绩查询上下文
+WECHAT_ACCOUNT |o--o{ SCORE_CTX            : resolves
+STUDENT_REF    |o--o{ SCORE_CTX            : selected
+
+note bottom of STUDENT_REF
+  此实体完整字段与关系定义在「图 B · 教学与成绩域」。
+  这里作为引用占位，只保留绑定所需的最小字段。
+end note
+
+@enduml
